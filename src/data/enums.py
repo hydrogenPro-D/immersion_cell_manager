@@ -10,7 +10,6 @@ _STATUS_COLORS: dict[str, tuple[str, str]] = {
     "Reserved":      ("#FFEAB3", "#7A5A14"),
     "In use":        ("#CCE2F8", "#1E4E8C"),
     "In repair":     ("#F8C8C2", "#8B2A1F"),
-    "Retired":       ("#F3CFE0", "#7A2C58"),
     "Test finished": ("#B7E4DE", "#0B5C5C"),
 }
 
@@ -27,7 +26,6 @@ class CellStatus(str, Enum):
     RESERVED = "Reserved"
     IN_USE = "In use"
     IN_REPAIR = "In repair"
-    RETIRED = "Retired"
     TEST_FINISHED = "Test finished"
 
     @classmethod

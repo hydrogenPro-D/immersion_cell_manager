@@ -13,22 +13,58 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem,
 )
 from PyQt6.QtCore import Qt
+
 from PyQt6.QtGui import QColor
 
-from src.data.immersion_cells_manager import ImmersionCellsManager
 from src.gui.widgets.edit_row_dialog import EditRowDialog
 from src.gui.widgets.data_table_widget import DataTableWidget
 from src.gui.widgets.confirm_dialog import ConfirmDialog
 from src.gui.styles.tab_styles import TAB_STYLE
 
 
-class ImmersionCellsTab(QWidget):
-    def __init__(self):
+class CellsMapping(QWidget):
+    def __init__(self, manager, on_channel_logged=None, on_project_removed=None,
+                 on_project_renamed=None):
         super().__init__()
-        self.manager = ImmersionCellsManager()
+        self.manager = manager
+        self.on_channel_logged = on_channel_logged
+        self.on_project_removed = on_project_removed
+        self.on_project_renamed = on_project_renamed
         self.init_ui()
         self.load_data()
         self._refresh_status()
+
+    def _reload_from_external_changes(self) -> None:
+        """Reload the table when external changes are detected."""
+        self.reload_data()
+
+    def reload_data(self) -> None:
+        """Reload data from the manager (called when external changes are detected)."""
+        try:
+            # Remember the selected channel by value, not row index: the row
+            # order can change after an external reload.
+            selected_channel = None
+            selected_rows = self.table.selectionModel().selectedRows()
+            if selected_rows:
+                selected_channel = self._channel_for_row(selected_rows[0].row())
+
+            # Clear the table
+            self.table.setRowCount(0)
+
+            # Reload data
+            self.load_data()
+            self._refresh_status()
+
+            # Re-apply the active search filter so a reload doesn't reveal rows
+            # the user has filtered out.
+            self._apply_filter(self.search_input.text())
+
+            # Restore selection by matching the channel value.
+            if selected_channel:
+                self._select_row_by_channel(selected_channel)
+
+        except Exception as e:
+            print(f"Error reloading data from external changes: {e}")
 
     # ----------------------------------------------------------------- UI
     def init_ui(self):
@@ -64,7 +100,7 @@ class ImmersionCellsTab(QWidget):
         text_col = QVBoxLayout()
         text_col.setSpacing(2)
 
-        title = QLabel("Immersion Cells")
+        title = QLabel("Cells mapping")
         title.setObjectName("PageTitle")
 
         text_col.addWidget(title)
@@ -110,14 +146,16 @@ class ImmersionCellsTab(QWidget):
         )
 
         # Action buttons live in the toolbar for a tighter, more modern feel
-        self.add_button = QPushButton("＋  Add Immersion Cell")
+        self.add_button = QPushButton("＋  Add Channel")
         self.add_button.setObjectName("PrimaryButton")
         self.add_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.add_button.setFixedWidth(150)
         self.add_button.clicked.connect(self._on_add_clicked)
 
-        self.remove_button = QPushButton("🗑  Remove Selected Immersion Cell")
+        self.remove_button = QPushButton("🗑  Remove Selected Channel")
         self.remove_button.setObjectName("DangerButton")
         self.remove_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.remove_button.setFixedWidth(220)
         self.remove_button.setEnabled(False)
         self.remove_button.clicked.connect(self._on_remove_clicked)
 
@@ -165,7 +203,11 @@ class ImmersionCellsTab(QWidget):
 
     def open_edit_dialog(self, row):
         """Open a dialog to edit row values"""
-        dialog = EditRowDialog(self.table, row, self.manager, self)
+        dialog = EditRowDialog(
+            self.table, row, self.manager, self,
+            on_project_removed=self.on_project_removed,
+            on_project_renamed=self.on_project_renamed,
+        )
         dialog.row_saved.connect(self._on_row_saved)
         dialog.exec()
         self._refresh_status()
@@ -179,8 +221,70 @@ class ImmersionCellsTab(QWidget):
         """Callback when a row is saved from the edit dialog"""
         try:
             self.manager.update_row_by_channel(row_data)
+
+            # Update the duration column for this row since it's calculated at runtime
+            try:
+                col_names = self.manager.get_column_names()
+                duration_col_idx = col_names.index("Duration")
+                channel_col_idx = col_names.index("Channel")
+                channel = row_data[channel_col_idx]
+
+                # Get the updated cell data from manager to recalculate duration
+                cell = self.manager.get_cell_by_channel(channel)
+                new_duration = self.manager._calculate_duration(cell)
+
+                # Find the row in the table and update the duration column
+                edited_row_idx = None
+                for row_idx in range(self.table.rowCount()):
+                    table_channel_item = self.table.item(row_idx, channel_col_idx)
+                    if table_channel_item and table_channel_item.text() == channel:
+                        duration_item = QTableWidgetItem(new_duration)
+                        duration_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter)
+                        self.table.setItem(row_idx, duration_col_idx, duration_item)
+                        edited_row_idx = row_idx
+                        break
+            except (ValueError, IndexError):
+                edited_row_idx = None
+
             # Re-sort if a sort is currently active
             self.table.resort_if_needed()
+
+            # Re-center all items in the edited row after sorting
+            if edited_row_idx is not None:
+                col_names = self.manager.get_column_names()
+                channel_col_idx = col_names.index("Channel")
+                for row_idx in range(self.table.rowCount()):
+                    table_channel_item = self.table.item(row_idx, channel_col_idx)
+                    if table_channel_item and table_channel_item.text() == channel:
+                        # Re-apply center alignment to all items in the row
+                        for col_idx in range(self.table.columnCount()):
+                            item = self.table.item(row_idx, col_idx)
+                            if item:
+                                item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter)
+                        # Scroll to keep it visible
+                        self.table.scrollToItem(self.table.item(row_idx, 0), 
+                                               self.table.ScrollHint.PositionAtCenter)
+                        break
+
+            # Log the channel usage via callback if available
+            if self.on_channel_logged:
+                col_names = self.manager.get_column_names()
+                # row_data might have an extra element at the end: original_data_filename
+                # Only map the columns that have column names
+                row_dict = {col_names[i]: row_data[i] for i in range(min(len(col_names), len(row_data)))}
+
+                # If there's an extra element, it's the original data filename
+                original_data_filename = ""
+                if len(row_data) > len(col_names):
+                    original_data_filename = row_data[len(col_names)]
+
+                # Pass original filename info for tracking
+                if original_data_filename:
+                    row_dict["__original_data_filename"] = original_data_filename
+
+                channel = row_dict.get("Channel", "")
+                if channel:
+                    self.on_channel_logged(channel, row_dict)
         except Exception as e:
             print(f"Error saving row to JSON: {e}")
 
@@ -197,7 +301,11 @@ class ImmersionCellsTab(QWidget):
             self.table.setItem(row_position, column, item)
 
         # Open the dialog in add mode
-        dialog = EditRowDialog(self.table, row_position, self.manager, self, is_add_mode=True)
+        dialog = EditRowDialog(
+            self.table, row_position, self.manager, self, is_add_mode=True,
+            on_project_removed=self.on_project_removed,
+            on_project_renamed=self.on_project_renamed,
+        )
         dialog.row_added.connect(self._on_row_added)
         dialog.exec()
         self._refresh_status()
@@ -208,6 +316,14 @@ class ImmersionCellsTab(QWidget):
             self.manager.add_new_row(row_data)
             # Re-sort if a sort is currently active
             self.table.resort_if_needed()
+
+            # Log the channel usage via callback if available
+            if self.on_channel_logged:
+                col_names = self.manager.get_column_names()
+                row_dict = {col_names[i]: row_data[i] for i in range(len(col_names))}
+                channel = row_dict.get("Channel", "")
+                if channel:
+                    self.on_channel_logged(channel, row_dict)
         except Exception as e:
             print(f"Error adding row to JSON: {e}")
 
@@ -275,9 +391,39 @@ class ImmersionCellsTab(QWidget):
         item = self.table.item(row, col)
         return item.text() if item else ""
 
+    def _select_row_by_channel(self, channel: str) -> None:
+        """Select the row whose channel matches ``channel``, if one exists."""
+        try:
+            col = self.manager.get_column_names().index("Channel")
+        except ValueError:
+            return
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, col)
+            if item and item.text() == channel:
+                self.table.selectRow(row)
+                return
+
     def _refresh_status(self, visible_override=None):
         total = self.table.rowCount()
-        self.count_badge.setText(f"{total} cell{'s' if total != 1 else ''}")
+        
+        # Count cells that are NOT in "In repair" status
+        active_count = total
+        try:
+            column_names = self.manager.get_column_names()
+            status_col_index = column_names.index("Status")
+            
+            in_repair_count = 0
+            for row in range(total):
+                item = self.table.item(row, status_col_index)
+                if item and item.text() == "In repair":
+                    in_repair_count += 1
+            
+            active_count = total - in_repair_count
+        except (ValueError, IndexError):
+            # If Status column not found, just use total count
+            active_count = total
+        
+        self.count_badge.setText(f"{active_count} operational cell{'s' if active_count != 1 else ''}")
         if visible_override is not None and visible_override != total:
             self.status_label.setText(f"Showing {visible_override} of {total} cells.")
         else:

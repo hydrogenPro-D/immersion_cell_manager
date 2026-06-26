@@ -135,6 +135,52 @@ DIALOG_STYLE = """
         border-radius: 6px;
     }
 
+    /* --------- Project (QComboBox with visible dropdown arrow) --------- */
+    QComboBox#ProjectField {
+        background-color: #F7FAFC;
+        border: 1px solid #D8E2E8;
+        border-radius: 8px;
+        padding: 8px 12px;
+        padding-right: 34px;
+        min-height: 22px;
+        font-size: 13px;
+        color: #1F2A33;
+    }
+    QComboBox#ProjectField:hover {
+        border: 1px solid #BBD0D8;
+        background-color: #FFFFFF;
+    }
+    QComboBox#ProjectField:focus,
+    QComboBox#ProjectField:on {
+        border: 1px solid #3FA3A3;
+        background-color: #FFFFFF;
+    }
+    QComboBox#ProjectField::drop-down {
+        border: none;
+        width: 0px;
+        subcontrol-origin: padding;
+        subcontrol-position: top right;
+    }
+    QComboBox#ProjectField::down-arrow {
+        image: none;
+        width: 0px;
+        height: 0px;
+        border: none;
+    }
+    QComboBox#ProjectField QAbstractItemView {
+        background-color: #FFFFFF;
+        border: 1px solid #D8E2E8;
+        border-radius: 8px;
+        padding: 4px;
+        selection-background-color: #BFE6E6;
+        selection-color: #0B3B3B;
+        outline: 0;
+    }
+    QComboBox#ProjectField QAbstractItemView::item {
+        padding: 7px 10px;
+        border-radius: 6px;
+    }
+
     /* --------- Date (QDateEdit) --------- */
     QDateEdit#DateField {
         background-color: #F7FAFC;
@@ -162,7 +208,7 @@ DIALOG_STYLE = """
     }
     QDateEdit#DateField::drop-down {
         border: none;
-        width: 0px;
+        width: 34px;
         subcontrol-origin: padding;
         subcontrol-position: top right;
     }
@@ -192,7 +238,44 @@ DIALOG_STYLE = """
         background-color: #FFFFFF;
     }
 
-    /* Scroll area for long forms */
+    /* --------- Hours SpinBox --------- */
+    QSpinBox#HoursSpinBox {
+        background-color: #F7FAFC;
+        border: 1px solid #D8E2E8;
+        border-radius: 8px;
+        padding: 8px 12px;
+        min-height: 22px;
+        font-size: 13px;
+        color: #1F2A33;
+    }
+    QSpinBox#HoursSpinBox:hover {
+        border: 1px solid #BBD0D8;
+        background-color: #FFFFFF;
+    }
+    QSpinBox#HoursSpinBox:focus {
+        border: 1px solid #3FA3A3;
+        background-color: #FFFFFF;
+    }
+    QSpinBox#HoursSpinBox:disabled {
+        color: #9AA7B0;
+        background-color: #ECEFF2;
+    }
+    QSpinBox#HoursSpinBox::up-button,
+    QSpinBox#HoursSpinBox::down-button {
+        width: 20px;
+        background-color: #F7FAFC;
+        border: 1px solid #D8E2E8;
+    }
+    QSpinBox#HoursSpinBox::up-button:hover,
+    QSpinBox#HoursSpinBox::down-button:hover {
+        background-color: #E6F4F4;
+    }
+    QSpinBox#HoursSpinBox::up-arrow,
+    QSpinBox#HoursSpinBox::down-arrow {
+        width: 8px;
+        height: 8px;
+    }
+
     QScrollArea {
         background: transparent;
         border: none;
