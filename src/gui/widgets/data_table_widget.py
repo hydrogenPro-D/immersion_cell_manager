@@ -1,13 +1,9 @@
-from PyQt6.QtWidgets import (
-    QTableWidget,
-    QTableWidgetItem,
-    QHeaderView,
-    QGraphicsDropShadowEffect,
-    QAbstractItemView,
-)
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 import re
+
+from PyQt6.QtWidgets import QTableWidget, QTableView, QAbstractItemView, QHeaderView, QGraphicsDropShadowEffect, QTableWidgetItem
+
 from src.gui.styles.table_styles import TABLE_STYLE
 from src.gui.widgets.pill_delegate import PillDelegate
 
@@ -15,11 +11,20 @@ from src.gui.widgets.pill_delegate import PillDelegate
 class DataTableWidget(QTableWidget):
     """Custom table widget for displaying and managing data"""
 
+    # Comment text wrapping configuration
+    COMMENT_WRAP_LENGTH = 60
+
     def __init__(self, manager, parent=None):
         super().__init__(parent)
         self.manager = manager
-        self.sorted_column = None  # Track which column is currently sorted
+        self.sorted_column = None
         self.sort_order = None
+        # Get the projects manager to look up descriptions
+        from src.data.immersion_cells_manager import ImmersionCellsManager
+        if isinstance(manager, ImmersionCellsManager):
+            self.projects_manager = manager.get_projects_manager()
+        else:
+            self.projects_manager = None
         self.init_table()
         self._install_column_delegates()
 
@@ -28,6 +33,13 @@ class DataTableWidget(QTableWidget):
         # Set column count and headers
         self.setColumnCount(len(self.manager.get_column_names()))
         self.setHorizontalHeaderLabels(self.manager.get_column_names())
+
+        # Hide the "Start hour" column - it's managed internally by the date picker
+        try:
+            start_hour_col = self.manager.get_column_names().index("Start hour")
+            self.setColumnHidden(start_hour_col, True)
+        except ValueError:
+            pass  # Column doesn't exist yet, skip
 
         # Apply styling
         self.setStyleSheet(TABLE_STYLE + """
@@ -50,7 +62,7 @@ class DataTableWidget(QTableWidget):
         self.setAlternatingRowColors(True)
         self.setMouseTracking(True)
         self.setShowGrid(False)
-        self.setWordWrap(False)
+        self.setWordWrap(True)
         self.setCornerButtonEnabled(False)
 
         # Horizontal header polish
@@ -58,7 +70,7 @@ class DataTableWidget(QTableWidget):
         h_header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         h_header.setMinimumSectionSize(100)  # Minimum width per column
         h_header.setHighlightSections(False)
-        h_header.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        h_header.setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         h_header.setFixedHeight(44)
         # Connect header click for custom sorting
         h_header.sectionClicked.connect(self._on_header_clicked)
@@ -75,15 +87,191 @@ class DataTableWidget(QTableWidget):
         shadow.setColor(QColor(20, 50, 70, 45))
         self.setGraphicsEffect(shadow)
 
+        # Frozen first column overlay
+        self._init_frozen_column()
+
+    # ------------------------------------------------------------------
+    # Frozen first column
+    # ------------------------------------------------------------------
+    def _init_frozen_column(self):
+        """Create an overlay view pinned to the left that mirrors column 0.
+
+        The overlay shares the model and selection model with the main
+        table, so data, sorting and row selection stay in sync while the
+        first column remains visible during horizontal scrolling.
+        """
+        self.frozen_view = QTableView(self)
+        self.frozen_view.setModel(self.model())
+        self.frozen_view.setSelectionModel(self.selectionModel())
+        self.frozen_view.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.frozen_view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.frozen_view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.frozen_view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.frozen_view.setAlternatingRowColors(True)
+        self.frozen_view.setShowGrid(False)
+        self.frozen_view.setWordWrap(True)
+        self.frozen_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.frozen_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        # Match the main table look, but drop the outer margin/border so the
+        # overlay sits flush inside the main table frame.
+        self.frozen_view.setStyleSheet(
+            TABLE_STYLE.replace("QTableWidget", "QTableView") + """
+            QTableView {
+                margin: 0px;
+                border: none;
+                border-right: 1px solid #D8E2E8;
+                border-top-left-radius: 12px;
+                background-color: #FFFFFF;
+            }
+            QTableView::item:focus {
+                outline: none;
+                border: none;
+            }
+            QHeaderView::section:last {
+                border-top-right-radius: 0px;
+                border-right: 1px solid rgba(255, 255, 255, 0.18);
+            }
+        """)
+
+        # Frozen header mirrors the main header and forwards sort clicks
+        f_header = self.frozen_view.horizontalHeader()
+        f_header.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        f_header.setHighlightSections(False)
+        f_header.setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
+        f_header.setFixedHeight(self.horizontalHeader().height())
+        f_header.setSectionsClickable(True)
+        f_header.sectionClicked.connect(self._on_header_clicked)
+
+        f_v_header = self.frozen_view.verticalHeader()
+        f_v_header.setDefaultSectionSize(self.verticalHeader().defaultSectionSize())
+        f_v_header.setVisible(False)
+
+        # Only show the first column
+        for col in range(1, self.columnCount()):
+            self.frozen_view.setColumnHidden(col, True)
+        self.frozen_view.setColumnWidth(0, self.columnWidth(0))
+
+        # Keep the overlay above the main viewport
+        self.viewport().stackUnder(self.frozen_view)
+
+        # Forward interactions to the main table (shared model => same indexes)
+        self.frozen_view.doubleClicked.connect(self.doubleClicked)
+        self.frozen_view.clicked.connect(self.clicked)
+
+        # Keep widths, row heights and scrolling in sync
+        self.horizontalHeader().sectionResized.connect(self._on_frozen_section_resized)
+        self.verticalHeader().sectionResized.connect(self._on_frozen_row_resized)
+        self.verticalScrollBar().valueChanged.connect(self.frozen_view.verticalScrollBar().setValue)
+        self.frozen_view.verticalScrollBar().valueChanged.connect(self.verticalScrollBar().setValue)
+
+        self._update_frozen_geometry()
+        self.frozen_view.show()
+
+    def _on_frozen_section_resized(self, logical_index: int, old_size: int, new_size: int):
+        """Mirror width changes of column 0 onto the frozen view."""
+        if logical_index == 0:
+            self.frozen_view.setColumnWidth(0, new_size)
+            self._update_frozen_geometry()
+
+    def _on_frozen_row_resized(self, logical_index: int, old_size: int, new_size: int):
+        """Mirror row height changes onto the frozen view."""
+        self.frozen_view.setRowHeight(logical_index, new_size)
+
+    def _update_frozen_geometry(self):
+        """Position the frozen view over column 0, covering header + rows."""
+        viewport_geo = self.viewport().geometry()
+        header_height = self.horizontalHeader().height()
+        self.frozen_view.setGeometry(
+            viewport_geo.x(),
+            viewport_geo.y() - header_height,
+            self.columnWidth(0),
+            header_height + viewport_geo.height(),
+        )
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "frozen_view"):
+            self._update_frozen_geometry()
+
     def add_row(self, data):
         """Add a row to the table"""
         row_position = self.rowCount()
         self.insertRow(row_position)
 
+        column_names = self.manager.get_column_names()
         for column, value in enumerate(data):
-            item = QTableWidgetItem(str(value) if value is not None else "")
-            item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+            text = str(value) if value is not None else ""
+
+            # Get column name to check if it's Comments or Project ID
+            column_name = (
+                column_names[column]
+                if column < len(column_names)
+                else ""
+            )
+
+            # Wrap long text in Comments column
+            if column_name == "Comments" and len(text) > self.COMMENT_WRAP_LENGTH:
+                text = self._wrap_text(text, max_length=self.COMMENT_WRAP_LENGTH)
+
+            item = QTableWidgetItem(text)
+            item.setTextAlignment(
+                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter
+            )
             self.setItem(row_position, column, item)
+
+        # Let PyQt auto-resize row to fit content
+        self.resizeRowToContents(row_position)
+
+    def _wrap_text(self, text: str, max_length: int = None) -> str:
+        """Wrap text to fit within max_length per line.
+
+        Breaks text at word boundaries to avoid splitting words.
+        Uses newline character to create line breaks.
+        """
+        if max_length is None:
+            max_length = self.COMMENT_WRAP_LENGTH
+
+        words = text.split()
+        lines = []
+        current_line = []
+        current_length = 0
+
+        for word in words:
+            word_length = len(word)
+            # Add 1 for the space between words
+            if current_length + word_length + 1 <= max_length:
+                current_line.append(word)
+                current_length += word_length + 1
+            else:
+                # Start a new line
+                if current_line:
+                    lines.append(" ".join(current_line))
+                current_line = [word]
+                current_length = word_length
+
+        # Add the last line
+        if current_line:
+            lines.append(" ".join(current_line))
+
+        return "\n".join(lines)
+
+    def mouseMoveEvent(self, event):
+        """Show tooltip for Project ID column items on hover."""
+        item = self.itemAt(event.pos())
+        if item and self.projects_manager:
+            column_names = self.manager.get_column_names()
+            column_index = self.column(item)
+
+            if column_index < len(column_names) and column_names[column_index] == "Project ID":
+                project_name = item.text().strip()
+                if project_name:
+                    description = self.projects_manager.get_description(project_name)
+                    if description:
+                        item.setToolTip(description)
+                        return
+
+        super().mouseMoveEvent(event)
 
     def _on_header_clicked(self, column: int):
         """Handle header click for sorting with cycle: asc -> desc -> no sort"""
@@ -153,7 +341,10 @@ class DataTableWidget(QTableWidget):
         selected_row_data = None
         if selected_rows:
             selected_row = selected_rows[0].row()
-            selected_row_data = [self.item(selected_row, col).text() for col in range(self.columnCount())]
+            selected_row_data = [
+                self.item(selected_row, col).text()
+                for col in range(self.columnCount())
+            ]
 
         # Clear and reload all data in original order
         self.setRowCount(0)
@@ -167,7 +358,10 @@ class DataTableWidget(QTableWidget):
         # Restore selection if possible
         if selected_row_data:
             for row in range(self.rowCount()):
-                row_data = [self.item(row, col).text() for col in range(self.columnCount())]
+                row_data = [
+                    self.item(row, col).text()
+                    for col in range(self.columnCount())
+                ]
                 if row_data == selected_row_data:
                     self.selectRow(row)
                     break
@@ -273,4 +467,9 @@ class DataTableWidget(QTableWidget):
             if resolver is None:
                 continue
             self.setItemDelegateForColumn(col, PillDelegate(resolver, self))
+            # Mirror the delegate on the frozen overlay for the first column
+            if col == 0 and hasattr(self, "frozen_view"):
+                self.frozen_view.setItemDelegateForColumn(
+                    0, PillDelegate(resolver, self.frozen_view)
+                )
 

@@ -4,3 +4,8 @@
 build/
 dist/
 venv/
+notes.txt
+*.csv
+
+# Local DB credentials (use config/db_config.example.json as the template)
+config/db_config.json

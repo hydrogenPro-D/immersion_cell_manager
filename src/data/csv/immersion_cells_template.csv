@@ -1,4 +1,4 @@
-channel,super_user,current_owner,assembled_by,status,start_date,duration,cathode,anode,separator,data_filename,added_water_b,comments
+channel,project_id,current_owner,assembled_by,status,start_date,start_hour,cathode,anode,data_filename,added_water_b,comments,separator
 1-1,,,,Available,,,,,,,,
 1-2,,,,Available,,,,,,,,
 1-3,,,,Available,,,,,,,,

@@ -65,7 +65,6 @@ TAB_STYLE = """
 
     /* ---------- Buttons ---------- */
     QPushButton#PrimaryButton {
-        min-width: 170px;
         padding: 10px 20px;
         border-radius: 10px;
         font-size: 12px;
@@ -91,7 +90,6 @@ TAB_STYLE = """
     }
 
     QPushButton#DangerButton {
-        min-width: 170px;
         padding: 10px 20px;
         border-radius: 10px;
         font-size: 12px;

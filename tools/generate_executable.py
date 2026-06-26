@@ -23,6 +23,8 @@ SPEC_FILENAME = f"{EXECUTABLE_NAME}.spec"
 SPEC_FILE = SPEC_PATH / SPEC_FILENAME
 DATA_FOLDER = PROJECT_ROOT / "src" / "data" / "csv"
 TEMPLATE_FILE = DATA_FOLDER / "immersion_cells_template.csv"
+DRIVER_FOLDER = PROJECT_ROOT / "driver"
+CONFIG_FOLDER = PROJECT_ROOT / "config"
 EXECUTABLE_FOLDER = DIST_PATH / EXECUTABLE_NAME
 
 
@@ -254,6 +256,17 @@ def build_executable() -> None:
         print(f"Successfully copied: {dst_file}")
     else:
         print(f"Template file does not exist (skipping): {TEMPLATE_FILE}")
+
+    # Copy the ODBC driver folder so the app can install the driver on first run.
+    # db.py resolves it as parents[2] of itself, which is _internal/ in the build.
+    driver_dest = EXECUTABLE_FOLDER / "_internal" / "driver"
+    _copy_folder(DRIVER_FOLDER, driver_dest)
+
+    # Copy the config folder (db_config.json + example) so the frozen app can
+    # read its DB credentials. db.py resolves it as parents[2]/config, which is
+    # _internal/config in the build.
+    config_dest = EXECUTABLE_FOLDER / "_internal" / "config"
+    _copy_folder(CONFIG_FOLDER, config_dest)
 
     print(f"Build finished. Executable output is under: {DIST_PATH}")
     print(f"Spec file is at: {SPEC_FILE}")
