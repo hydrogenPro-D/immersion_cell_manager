@@ -13,7 +13,9 @@ The app **reads** tables directly and **writes only through stored procedures** 
 it has no direct INSERT/UPDATE/DELETE. Ownership chaining means `EXECUTE` on the
 procs is sufficient; the role needs no table-level DML. EXECUTE is granted
 **per procedure** (not schema-wide), so a new write proc isn't runnable until its
-`GRANT` is added to `010`.
+`GRANT` is added. Procs `007`–`009` are granted together in `010`; procs added
+**after** `010` grant themselves in their own migration (the files are
+append-only, so `010` is never edited again).
 
 ## Files (run in order)
 
@@ -28,12 +30,15 @@ procs is sufficient; the role needs no table-level DML. EXECUTE is granted
 | 007 | `007_create_cell_procedures.sql` | `usp_cell_insert` / `_update` / `_delete` |
 | 008 | `008_create_project_procedures.sql` | `usp_project_insert` / `_update` / `_rename` / `_delete` |
 | 009 | `009_create_history_procedures.sql` | `usp_history_insert` / `_update` |
-| 010 | `010_grant_execute_to_role.sql` | `EXECUTE` on each write proc to the role |
+| 010 | `010_grant_execute_to_role.sql` | `EXECUTE` on each write proc (007–009) to the role |
+| 011 | `011_create_history_delete_procedure.sql` | `usp_history_delete` (+ its own `EXECUTE` grant) |
+| 012 | `012_create_history_filename_exists_procedure.sql` | `usp_history_filename_exists` (data_filename uniqueness check; + its own `EXECUTE` grant) |
+| 013 | `013_add_expected_end_date.sql` | adds `expected_end_date` to `cells` + `channel_history`; updates the 4 insert/update procs |
 
 ## How to run
 
 1. Connect SSMS / Azure Data Studio to the target database (apply to **`dataloggingTest`** first, `dataloggingDev` after).
-2. Run `001` → `010` in order. Each file is safe to re-run.
+2. Run `001` → `013` in order. Each file is safe to re-run.
 3. For `003`, set a real password in `@pw` first, run, then **close without saving**.
 4. Confirm: `SELECT * FROM icm.schema_migrations ORDER BY id;`
 

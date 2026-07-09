@@ -14,9 +14,17 @@ class DataTableWidget(QTableWidget):
     # Comment text wrapping configuration
     COMMENT_WRAP_LENGTH = 60
 
+    # Zoom scales the cell font + row height together.
+    BASE_ROW_HEIGHT = 40
+    BASE_FONT_PX = 12
+    MIN_ZOOM = 0.7
+    MAX_ZOOM = 2.0
+    ZOOM_STEP = 0.10
+
     def __init__(self, manager, parent=None):
         super().__init__(parent)
         self.manager = manager
+        self._zoom = 1.0
         self.sorted_column = None
         self.sort_order = None
         # Get the projects manager to look up descriptions
@@ -41,13 +49,8 @@ class DataTableWidget(QTableWidget):
         except ValueError:
             pass  # Column doesn't exist yet, skip
 
-        # Apply styling
-        self.setStyleSheet(TABLE_STYLE + """
-            QTableWidget::item:focus {
-                outline: none;
-                border: none;
-            }
-        """)
+        # Apply styling (font-size is zoom-dependent, so build it dynamically)
+        self._apply_table_style()
 
         # Selection / editing behaviour
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -91,6 +94,73 @@ class DataTableWidget(QTableWidget):
         self._init_frozen_column()
 
     # ------------------------------------------------------------------
+    # Zoom (row height + font)
+    # ------------------------------------------------------------------
+    def _font_px(self) -> int:
+        return max(8, round(self.BASE_FONT_PX * self._zoom))
+
+    def _apply_table_style(self) -> None:
+        """(Re)apply the main table stylesheet with the current zoom font size.
+
+        The widget QFont is set to the same size too: the stylesheet governs
+        painting, but row auto-fit (resizeRowToContents) sizes from the QFont, so
+        both must agree or rows would clip the text.
+        """
+        fs = self._font_px()
+        self.setStyleSheet(TABLE_STYLE + f"""
+            QTableWidget::item:focus {{ outline: none; border: none; }}
+            QTableWidget {{ font-size: {fs}px; }}
+            QTableWidget::item {{ font-size: {fs}px; }}
+        """)
+        f = self.font()
+        f.setPixelSize(fs)
+        self.setFont(f)
+
+    def _apply_frozen_style(self) -> None:
+        """(Re)apply the frozen column overlay stylesheet at the current zoom."""
+        if not hasattr(self, "frozen_view"):
+            return
+        fs = self._font_px()
+        self.frozen_view.setStyleSheet(
+            TABLE_STYLE.replace("QTableWidget", "QTableView") + f"""
+            QTableView {{
+                margin: 0px;
+                border: none;
+                border-right: 1px solid #D8E2E8;
+                border-top-left-radius: 12px;
+                background-color: #FFFFFF;
+                font-size: {fs}px;
+            }}
+            QTableView::item {{ font-size: {fs}px; }}
+            QTableView::item:focus {{ outline: none; border: none; }}
+            QHeaderView::section:last {{
+                border-top-right-radius: 0px;
+                border-right: 1px solid rgba(255, 255, 255, 0.18);
+            }}
+        """)
+        f = self.frozen_view.font()
+        f.setPixelSize(fs)
+        self.frozen_view.setFont(f)
+
+    def set_zoom(self, zoom: float) -> float:
+        """Scale the cell font + row height by ``zoom``. Returns the clamped value."""
+        zoom = max(self.MIN_ZOOM, min(self.MAX_ZOOM, zoom))
+        self._zoom = zoom
+        self._apply_table_style()
+        self._apply_frozen_style()
+        row_min = round(self.BASE_ROW_HEIGHT * zoom)
+        self.verticalHeader().setDefaultSectionSize(row_min)
+        if hasattr(self, "frozen_view"):
+            self.frozen_view.verticalHeader().setDefaultSectionSize(row_min)
+        # Re-fit existing rows to the new font (frozen rows follow via sectionResized).
+        self.resizeRowsToContents()
+        return zoom
+
+    def zoom_step(self, direction: int) -> float:
+        """Zoom in (direction>0) or out (direction<0) by one step."""
+        return self.set_zoom(self._zoom + direction * self.ZOOM_STEP)
+
+    # ------------------------------------------------------------------
     # Frozen first column
     # ------------------------------------------------------------------
     def _init_frozen_column(self):
@@ -114,25 +184,8 @@ class DataTableWidget(QTableWidget):
         self.frozen_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         # Match the main table look, but drop the outer margin/border so the
-        # overlay sits flush inside the main table frame.
-        self.frozen_view.setStyleSheet(
-            TABLE_STYLE.replace("QTableWidget", "QTableView") + """
-            QTableView {
-                margin: 0px;
-                border: none;
-                border-right: 1px solid #D8E2E8;
-                border-top-left-radius: 12px;
-                background-color: #FFFFFF;
-            }
-            QTableView::item:focus {
-                outline: none;
-                border: none;
-            }
-            QHeaderView::section:last {
-                border-top-right-radius: 0px;
-                border-right: 1px solid rgba(255, 255, 255, 0.18);
-            }
-        """)
+        # overlay sits flush inside the main table frame. (Font-size is zoomable.)
+        self._apply_frozen_style()
 
         # Frozen header mirrors the main header and forwards sort clicks
         f_header = self.frozen_view.horizontalHeader()

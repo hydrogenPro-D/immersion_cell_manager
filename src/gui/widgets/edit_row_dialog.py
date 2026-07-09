@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from PyQt6.QtWidgets import (
     QDialog,
     QVBoxLayout,
@@ -12,12 +14,14 @@ from PyQt6.QtWidgets import (
     QGraphicsDropShadowEffect,
     QComboBox,
     QDateEdit,
+    QDateTimeEdit,
     QAbstractSpinBox,
     QPushButton,
     QMessageBox,
     QTimeEdit,
+    QTextEdit,
 )
-from PyQt6.QtCore import Qt, QDate, QTime, pyqtSignal
+from PyQt6.QtCore import Qt, QDate, QTime, QEvent, pyqtSignal
 from PyQt6.QtGui import QColor, QPixmap, QIcon
 
 
@@ -60,8 +64,25 @@ class ProjectComboBox(ScrollableComboBox):
 class CalendarTimeEdit(QTimeEdit):
     """Time field that can only be changed through direct input or spinner buttons.
 
-    Scrolling does not change the time value.
+    Scrolling does not change the time value. The display format is ``HH:00``,
+    so the minutes are a fixed literal the user can't edit; clicking often
+    landed the cursor there, making the hours feel uneditable. We always snap
+    the cursor onto the hour section on focus and click so typing / the arrows
+    just work.
     """
+
+    def _select_hours(self) -> None:
+        self.setSelectedSection(QDateTimeEdit.Section.HourSection)
+
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        self._select_hours()
+
+    def mousePressEvent(self, event):
+        super().mousePressEvent(event)
+        # Override wherever the click landed (e.g. the fixed ":00") so the
+        # editable hour section is the one selected.
+        self._select_hours()
 
     def wheelEvent(self, event):
         # Pass wheel event to parent scroll area instead of changing the time.
@@ -123,6 +144,59 @@ class CalendarDateEdit(QDateEdit):
             self.width() - self._icon.width() - margin,
             (self.height() - self._icon.height()) // 2,
         )
+
+
+class OptionalDateEdit(CalendarDateEdit):
+    """Calendar date picker that can also be empty ("not set").
+
+    Emptiness is represented with Qt's special-value trick: at ``minimumDate``
+    the field shows placeholder text instead of a date. Delete/Backspace clears
+    it back to "not set"; picking a day from the calendar sets it.
+    """
+
+    UNSET = QDate(1900, 1, 1)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumDate(self.UNSET)
+        self.setSpecialValueText("— not set —")
+        self.setDate(self.UNSET)
+        cal = self.calendarWidget()
+        # When unset the value is 1900, so the popup would open on Jan 1900.
+        # Catch the calendar's show and jump it to the current month instead.
+        cal.installEventFilter(self)
+        # A planned end can't be in the past: snap a past pick up to today. Only
+        # user picks fire these, so loading an existing old value is unaffected.
+        cal.clicked.connect(self._reject_past)
+        cal.activated.connect(self._reject_past)
+
+    def _reject_past(self, qdate) -> None:
+        if qdate < QDate.currentDate():
+            self.setDate(QDate.currentDate())
+
+    def eventFilter(self, obj, event):
+        if (
+            obj is self.calendarWidget()
+            and event.type() == QEvent.Type.Show
+            and not self.is_set()
+        ):
+            today = QDate.currentDate()
+            obj.setCurrentPage(today.year(), today.month())
+        return super().eventFilter(obj, event)
+
+    def is_set(self) -> bool:
+        return self.date() != self.UNSET
+
+    def clear_date(self) -> None:
+        self.setDate(self.UNSET)
+
+    def keyPressEvent(self, event):
+        # Allow clearing; otherwise stay read-only (like CalendarDateEdit).
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            self.clear_date()
+            event.accept()
+            return
+        event.ignore()
 
 
 class CalendarDateTimeEdit(QWidget):
@@ -220,12 +294,24 @@ class EditRowDialog(QDialog):
     # Default values (by lower-cased column name) applied when a field is empty.
     DEFAULT_VALUES = {}
 
+    # Statuses that free the cell: saving clears the row except the kept fields.
+    CLEARING_STATUSES = ("available", "in repair")
+    # Fields (lower-cased) that survive the clear.
+    KEPT_ON_CLEAR = ("channel", "status", "added water by timing", "separator")
+    # Extra fields kept for a specific clearing status. In repair keeps Comments
+    # so the repair can be documented; Available still fully frees the cell.
+    EXTRA_KEPT_ON_CLEAR = {"in repair": ("comments",)}
+
     def __init__(self, table, row, manager, parent=None, is_add_mode=False,
-                 on_project_removed=None, on_project_renamed=None):
+                 on_project_removed=None, on_project_renamed=None,
+                 status_choices=None):
         super().__init__(parent)
         self.table = table
         self.row = row
         self.manager = manager
+        # When set, overrides the Status dropdown options (e.g. the Station
+        # Summary editor hides cell-only states like Available / In repair).
+        self._status_choices = status_choices
         self.columns = manager.get_column_names()
         self.input_fields = {}
         self.is_add_mode = is_add_mode
@@ -237,6 +323,7 @@ class EditRowDialog(QDialog):
         self.on_project_renamed = on_project_renamed
         self.status_warning_label = None  # Will hold the red warning "!"
         self.reset_info_banner = None  # Will hold the reset mode info banner
+        self.reset_info_message = None  # The banner's message label (dynamic text)
         self.initial_status = ""  # Track initial status to detect changes
 
         # Store the original data filename so we can detect changes
@@ -329,7 +416,7 @@ class EditRowDialog(QDialog):
         return "Update the fields below and click Save to apply your changes."
 
     def _create_reset_info_banner(self) -> QFrame:
-        """Create an info banner that appears when Status is set to Available."""
+        """Create an info banner shown when Status is set to a clearing status."""
         banner = QFrame()
         banner.setObjectName("ResetInfoBanner")
         banner.setStyleSheet("""
@@ -350,15 +437,11 @@ class EditRowDialog(QDialog):
         info_icon.setStyleSheet("font-size: 16px; color: #2196F3;")
         layout.addWidget(info_icon)
         
-        # Message
-        message = QLabel(
-            "<b>Status: Available</b><br>"
-            "“Available” marks the cell as free. Saving will clear this cell’s "
-            "fields (except Channel, Added water, and Separator) to free it. "
-            "Choose a different status instead if you want to keep the data."
-        )
+        # Message (text is set per target status in _on_status_changed).
+        message = QLabel(self._reset_banner_text("available"))
         message.setStyleSheet("color: #1565C0; font-size: 12px; line-height: 1.4;")
         message.setWordWrap(True)
+        self.reset_info_message = message
         layout.addWidget(message, 1)
         
         return banner
@@ -473,10 +556,31 @@ class EditRowDialog(QDialog):
             manage_btn = QPushButton("Manage projects")
             manage_btn.setToolTip("Add or remove projects")
             manage_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            # Don't let this button grab the Enter key — in a dialog every
+            # QPushButton is an auto-default by default, which made pressing
+            # Enter open the projects window instead of saving. Enter should
+            # fall through to the dialog's default Save button.
+            manage_btn.setAutoDefault(False)
             manage_btn.clicked.connect(
                 lambda _checked=False, combo=editor: self._open_projects_admin(combo)
             )
             editor_row.addWidget(manage_btn)
+            wrapper.addLayout(editor_row)
+        elif isinstance(editor, OptionalDateEdit) and not is_read_only:
+            # Optional date: a Clear button beside it resets it to "not set".
+            editor_row = QHBoxLayout()
+            editor_row.setContentsMargins(0, 0, 0, 0)
+            editor_row.setSpacing(8)
+            editor_row.addWidget(editor, 1)
+
+            clear_btn = QPushButton("Clear")
+            clear_btn.setToolTip("Clear this date")
+            clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            clear_btn.setAutoDefault(False)
+            clear_btn.clicked.connect(
+                lambda _checked=False, e=editor: e.clear_date()
+            )
+            editor_row.addWidget(clear_btn)
             wrapper.addLayout(editor_row)
         else:
             wrapper.addWidget(editor)
@@ -519,6 +623,28 @@ class EditRowDialog(QDialog):
             date_time_edit.set_calendar_enabled(not read_only)
             return date_time_edit
 
+        if spec.field_type is FieldType.DATE_ONLY:
+            date_edit = OptionalDateEdit()
+            date_edit.setObjectName("DateField")
+            date_edit.setDisplayFormat(spec.date_format)
+            date_edit.set_calendar_enabled(not read_only)
+            return date_edit
+
+        # Comments get a multi-line, growable box. A single-line QLineEdit hid
+        # every line past the first as the user typed; QTextEdit shows them and
+        # can be resized. Tab moves to the next field instead of inserting a tab.
+        if spec.name.strip().lower() == "comments":
+            text_edit = QTextEdit()
+            text_edit.setObjectName("CommentsField")
+            text_edit.setMinimumHeight(90)
+            text_edit.setTabChangesFocus(True)
+            if read_only:
+                text_edit.setReadOnly(True)
+                text_edit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            else:
+                text_edit.setPlaceholderText(spec.placeholder or "Enter comments…")
+            return text_edit
+
         # Default: plain text
         line = QLineEdit()
         line.setClearButtonEnabled(False)
@@ -535,9 +661,14 @@ class EditRowDialog(QDialog):
     def _spec_for(self, column_name: str) -> FieldSpec:
         """Get the FieldSpec for a column, falling back to plain text."""
         getter = getattr(self.manager, "get_field_spec", None)
-        if callable(getter):
-            return getter(column_name)
-        return FieldSpec(name=column_name, field_type=FieldType.TEXT)
+        spec = (
+            getter(column_name) if callable(getter)
+            else FieldSpec(name=column_name, field_type=FieldType.TEXT)
+        )
+        if (self._status_choices is not None
+                and column_name.strip().lower() == "status"):
+            spec = replace(spec, choices=list(self._status_choices))
+        return spec
 
     # -------------------------------------------------- Project colors
     @staticmethod
@@ -610,23 +741,42 @@ class EditRowDialog(QDialog):
             # Columns don't exist, skip
             pass
 
+    def _kept_on_clear(self, status: str) -> tuple:
+        """Fields (lower-cased) that survive the clear for ``status``."""
+        extra = self.EXTRA_KEPT_ON_CLEAR.get(status.strip().lower(), ())
+        return self.KEPT_ON_CLEAR + extra
+
+    def _reset_banner_text(self, status: str) -> str:
+        """Banner message listing the fields kept when freeing the cell."""
+        kept = "Channel, Added water, and Separator"
+        if status.strip().lower() == "in repair":
+            kept = "Channel, Added water, Separator, and Comments"
+        return (
+            "<b>This status frees the cell</b><br>"
+            f"Saving will clear this cell’s fields (except {kept}). "
+            "Choose a different status instead if you want to keep the data."
+        )
+
     def _on_status_changed(self, status_value: str):
         """Handle status change to show/hide the warning indicator and enable/disable fields.
         
         Banner only shows when actively switching TO Available (not when it's already set).
         """
+        new_status = status_value.strip().lower()
         if self.status_warning_label is not None:
-            self.status_warning_label.setHidden(status_value != "Available")
+            self.status_warning_label.setHidden(
+                new_status not in self.CLEARING_STATUSES
+            )
 
-        # Show banner only if switching FROM something else TO Available
-        # (not if status was already Available on dialog load)
+        # Show the banner when switching TO a clearing status from a non-clearing
+        # one (not if the cell was already a clearing status on load).
         if self.reset_info_banner is not None:
-            new_status = status_value.strip().lower()
-            is_now_available = new_status == "available"
-            was_already_available = self.initial_status == "available"
-
-            # Show banner only if transitioning to Available from non-Available
-            should_show_banner = is_now_available and not was_already_available
+            should_show_banner = (
+                new_status in self.CLEARING_STATUSES
+                and self.initial_status not in self.CLEARING_STATUSES
+            )
+            if should_show_banner and self.reset_info_message is not None:
+                self.reset_info_message.setText(self._reset_banner_text(new_status))
             self.reset_info_banner.setVisible(should_show_banner)
 
     def _open_projects_admin(self, combo: QComboBox) -> None:
@@ -711,32 +861,31 @@ class EditRowDialog(QDialog):
         except ValueError:
             pass
 
-        # Setting the status to 'Available' frees the cell: the clearable fields
-        # are emptied on save by the clear-on-Available step below. That is the
-        # expected workflow when switching an in-use cell to Available.
-        #
-        # The only case we guard is when the cell was *already* Available when
-        # the dialog opened and the user has since typed new data into it but
-        # left the status Available — there, auto-clearing would silently wipe
-        # what they just entered, so block and ask them to pick a real status
-        # (to keep it) or clear the fields themselves. Fields that survive
-        # clearing (Channel/Status/Added water/Separator) don't count.
+        # Available / In repair free the cell: the clearable fields are emptied on
+        # save by the clear step below. Guard only the case where the cell was
+        # *already* a clearing status on open and the user has since typed new
+        # data but left that status — auto-clearing would silently wipe it, so
+        # block and ask them to pick a data-keeping status (or clear it themselves).
+        new_status = row_data[status_col].strip().lower() if status_col is not None else ""
         if (status_col is not None
-                and row_data[status_col].strip().lower() == "available"
-                and self.initial_status == "available"):
-            keep_cols = ("channel", "status", "added water by timing", "separator")
+                and new_status in self.CLEARING_STATUSES
+                and self.initial_status == new_status):
+            # Only real typed data should block; ignore the kept fields and the
+            # always-populated date/hour/duration (which can't be emptied).
+            ignore_cols = self._kept_on_clear(new_status) + ("start date", "start hour", "duration")
             has_data = any(
                 row_data[idx].strip()
                 for idx, name in enumerate(self.columns)
-                if name.strip().lower() not in keep_cols
+                if name.strip().lower() not in ignore_cols
             )
             if has_data:
                 QMessageBox.warning(
                     self,
                     "Change the status to save",
-                    "This row still has data but its status is 'Available'.\n\n"
-                    "Change the status to something other than 'Available' to keep "
-                    "your changes or clear the other fields to free the cell.",
+                    f"This row still has data but its status is "
+                    f"'{row_data[status_col]}'.\n\n"
+                    "Change the status to one that keeps data, or clear the other "
+                    "fields to free the cell.",
                 )
                 return
 
@@ -750,6 +899,21 @@ class EditRowDialog(QDialog):
                     self,
                     "Data Filename Required",
                     f"Status '{row_data[status_col]}' requires a Data filename. Please enter one before saving.",
+                )
+                return
+
+            # data_filename is a unique key: block a new/changed name that another
+            # experiment already uses. (Unchanged name = same experiment, skipped.)
+            checker = getattr(self.manager, "filename_exists", None)
+            if (filename_value
+                    and filename_value != self.original_data_filename
+                    and callable(checker) and checker(filename_value)):
+                QMessageBox.warning(
+                    self,
+                    "Data filename already used",
+                    f"The data filename '{filename_value}' is already used by "
+                    "another experiment.\n\nData filenames must be unique. Please "
+                    "choose a different name.",
                 )
                 return
 
@@ -774,17 +938,12 @@ class EditRowDialog(QDialog):
                     return
                 # If Yes, proceed with the save
 
-        # If status is "Available", clear all fields except Channel, "Added water by timing", and "Separator"
-        if status_col is not None and row_data[status_col].strip().lower() == "available":
-            # Clear all columns except Channel, Status, "Added water by timing", and "Separator"
+        # Available / In repair free the cell: clear every field except the kept ones.
+        if (status_col is not None
+                and row_data[status_col].strip().lower() in self.CLEARING_STATUSES):
+            kept = self._kept_on_clear(row_data[status_col])
             for column_idx, column_name in enumerate(self.columns):
-                col_lower = column_name.strip().lower()
-                is_channel = col_lower == "channel"
-                is_status = col_lower == "status"
-                is_added_water = col_lower == "added water by timing"
-                is_separator = col_lower == "separator"
-
-                if not (is_channel or is_status or is_added_water or is_separator):
+                if column_name.strip().lower() not in kept:
                     row_data[column_idx] = ""
 
         # In add mode, validate that the channel doesn't already exist
@@ -880,11 +1039,20 @@ class EditRowDialog(QDialog):
                 editor.setHours(0)
             return
 
+        if isinstance(editor, OptionalDateEdit):
+            qdate = QDate.fromString(text.strip(), spec.date_format)
+            editor.setDate(qdate if qdate.isValid() else editor.UNSET)
+            return
+
         if isinstance(editor, QDateEdit):
             qdate = QDate.fromString(text, spec.date_format)
             if not qdate.isValid():
                 qdate = QDate.currentDate()
             editor.setDate(qdate)
+            return
+
+        if isinstance(editor, QTextEdit):
+            editor.setPlainText(text)
             return
 
         if isinstance(editor, QLineEdit):
@@ -899,8 +1067,12 @@ class EditRowDialog(QDialog):
         if isinstance(editor, CalendarDateTimeEdit):
             # Return only the date part for storage (hours are not persisted to CSV)
             return editor.date().toString(spec.date_format)
+        if isinstance(editor, OptionalDateEdit):
+            return editor.date().toString(spec.date_format) if editor.is_set() else ""
         if isinstance(editor, QDateEdit):
             return editor.date().toString(spec.date_format)
+        if isinstance(editor, QTextEdit):
+            return editor.toPlainText()
         if isinstance(editor, QLineEdit):
             return editor.text()
         return ""

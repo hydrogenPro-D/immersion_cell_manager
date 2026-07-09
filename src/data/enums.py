@@ -7,11 +7,14 @@ from enum import Enum
 # doesn't collide with Enum's own member machinery.
 _STATUS_COLORS: dict[str, tuple[str, str]] = {
     "Available":     ("#CDEFD6", "#1E6B3A"),
-    "Reserved":      ("#FFEAB3", "#7A5A14"),
     "In use":        ("#CCE2F8", "#1E4E8C"),
-    "In repair":     ("#F8C8C2", "#8B2A1F"),
+    "In repair":     ("#E04134", "#FFFFFF"),
     "Test finished": ("#B7E4DE", "#0B5C5C"),
 }
+
+# States that describe the physical cell, not an experiment/episode. History
+# episodes can't be set to these (they belong to the cell, not the test).
+_CELL_ONLY_STATUSES = {"Available", "In repair"}
 
 
 class CellStatus(str, Enum):
@@ -23,7 +26,6 @@ class CellStatus(str, Enum):
     """
 
     AVAILABLE = "Available"
-    RESERVED = "Reserved"
     IN_USE = "In use"
     IN_REPAIR = "In repair"
     TEST_FINISHED = "Test finished"
@@ -32,6 +34,11 @@ class CellStatus(str, Enum):
     def values(cls) -> list[str]:
         """Return the human-readable values in declaration order."""
         return [member.value for member in cls]
+
+    @classmethod
+    def experiment_values(cls) -> list[str]:
+        """Statuses valid for a history episode (excludes cell-only states)."""
+        return [v for v in cls.values() if v not in _CELL_ONLY_STATUSES]
 
     @classmethod
     def color_for(cls, value: str) -> tuple[str, str]:

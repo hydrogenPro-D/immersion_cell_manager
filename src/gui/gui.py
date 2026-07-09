@@ -36,8 +36,11 @@ class MainWindow(QMainWindow):
         # Create tab widget
         self.tabs = QTabWidget()
 
-        # Create station_summary_tab first so we can pass its callback to cells_mapping
-        self.station_summary_tab = StationSummary(self.summary_manager)
+        # Create station_summary_tab first so we can pass its callback to cells_mapping.
+        # It gets the cells manager too, to reuse the cell editor for episodes.
+        self.station_summary_tab = StationSummary(
+            self.summary_manager, self.cells_manager
+        )
 
         # Create cells_mapping_tab with a callback function to log channel usage
         def on_channel_logged(channel: str, row_data: dict):

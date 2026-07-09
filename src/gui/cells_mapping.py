@@ -19,6 +19,7 @@ from PyQt6.QtGui import QColor
 from src.gui.widgets.edit_row_dialog import EditRowDialog
 from src.gui.widgets.data_table_widget import DataTableWidget
 from src.gui.widgets.confirm_dialog import ConfirmDialog
+from src.gui.widgets.zoom_control import ZoomControl
 from src.gui.styles.tab_styles import TAB_STYLE
 
 
@@ -140,6 +141,8 @@ class CellsMapping(QWidget):
 
         layout.addWidget(search_label)
         layout.addWidget(self.search_input, 1)
+
+        layout.addWidget(ZoomControl(lambda d: self.table.zoom_step(d)))
 
         layout.addSpacerItem(
             QSpacerItem(12, 0, QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
@@ -405,24 +408,27 @@ class CellsMapping(QWidget):
 
     def _refresh_status(self, visible_override=None):
         total = self.table.rowCount()
-        
-        # Count cells that are NOT in "In repair" status
-        active_count = total
+
         try:
-            column_names = self.manager.get_column_names()
-            status_col_index = column_names.index("Status")
-            
-            in_repair_count = 0
-            for row in range(total):
+            status_col_index = self.manager.get_column_names().index("Status")
+        except (ValueError, IndexError):
+            status_col_index = None
+
+        # Operational = visible cells not "In repair". Count over the currently
+        # visible rows (filtering hides non-matches) so the badge tracks the
+        # filter, like the Station Summary badge.
+        visible_total = 0
+        in_repair_count = 0
+        for row in range(total):
+            if self.table.isRowHidden(row):
+                continue
+            visible_total += 1
+            if status_col_index is not None:
                 item = self.table.item(row, status_col_index)
                 if item and item.text() == "In repair":
                     in_repair_count += 1
-            
-            active_count = total - in_repair_count
-        except (ValueError, IndexError):
-            # If Status column not found, just use total count
-            active_count = total
-        
+        active_count = visible_total - in_repair_count
+
         self.count_badge.setText(f"{active_count} operational cell{'s' if active_count != 1 else ''}")
         if visible_override is not None and visible_override != total:
             self.status_label.setText(f"Showing {visible_override} of {total} cells.")
