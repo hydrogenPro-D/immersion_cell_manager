@@ -11,7 +11,8 @@ class FieldType(Enum):
     """How a column should be rendered inside the edit dialog."""
 
     TEXT = "text"
-    DATE = "date"          # ISO yyyy-MM-dd
+    DATE = "date"          # ISO yyyy-MM-dd (with an hours picker)
+    DATE_ONLY = "date_only"  # ISO yyyy-MM-dd, optional (can be left blank)
     CHOICE = "choice"      # one-of from FieldSpec.choices
 
 

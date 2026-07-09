@@ -8,13 +8,20 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QGraphicsDropShadowEffect,
+    QMessageBox,
+    QTableWidget,
+    QTableWidgetItem,
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor
 
+from src.data.enums import CellStatus
 from src.gui.styles.tab_styles import TAB_STYLE
 from src.gui.widgets.gantt_chart_widget import GanttChartWidget
 from src.gui.widgets.episode_info_dialog import EpisodeInfoDialog
+from src.gui.widgets.edit_row_dialog import EditRowDialog
+from src.gui.widgets.changes_dialog import ChangesDialog
+from src.gui.widgets.zoom_control import ZoomControl
 
 
 class StationSummary(QWidget):
@@ -31,9 +38,12 @@ class StationSummary(QWidget):
     # from the left edge). 0.5 = center, >0.5 = right of center.
     TODAY_VIEW_FRACTION = 0.75
 
-    def __init__(self, manager):
+    def __init__(self, manager, cells_manager=None):
         super().__init__()
         self.manager = manager
+        # Cells manager: lets us reuse the cell editor (EditRowDialog) to modify
+        # an episode, writing to the history instead of the cells table.
+        self.cells_manager = cells_manager
         self._initial_scroll_done = False
         # Cache of the unfiltered data + computed axis, so typing in the search
         # box re-filters without re-reading from disk.
@@ -89,7 +99,7 @@ class StationSummary(QWidget):
         title.setObjectName("PageTitle")
         layout.addWidget(title, 1)
 
-        self.count_badge = QLabel("0 cells")
+        self.count_badge = QLabel("0 operational cells")
         self.count_badge.setObjectName("PageBadge")
         self.count_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.count_badge, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -123,6 +133,8 @@ class StationSummary(QWidget):
         layout.addWidget(search_label)
         layout.addWidget(self.search_input, 1)
 
+        layout.addWidget(ZoomControl(lambda d: self.gantt.zoom_step(d)))
+
         shadow = QGraphicsDropShadowEffect(self)
         shadow.setBlurRadius(18)
         shadow.setOffset(0, 3)
@@ -132,37 +144,51 @@ class StationSummary(QWidget):
         return toolbar
 
     # ----------------------------------------------------------- Rendering
-    def _refresh(self) -> None:
-        """Reload data from the manager and rebuild the chart + statistics."""
+    def _refresh(self, preserve_view: bool = False) -> None:
+        """Reload data from the manager and rebuild the chart + statistics.
+
+        With ``preserve_view`` the current scroll position is kept (used after
+        edits / external changes so the view doesn't jump back to today).
+        """
         self._all_rows = self.manager.get_channel_history()
         self._date_window = self._compute_date_window(
             self.manager.get_date_range()
         )
 
-        self._render_filtered()
+        self._render_filtered(preserve_view=preserve_view)
         self._build_stats()
 
-        # Defer scroll positioning until after layout is complete.
-        QTimer.singleShot(100, self._scroll_to_today)
+        if not preserve_view:
+            # Defer scroll positioning until after layout is complete.
+            QTimer.singleShot(100, self._scroll_to_today)
 
     def _on_search_changed(self, _text: str) -> None:
-        """Re-render the chart when the project-ID filter changes."""
-        self._render_filtered()
-        # Keep today in view after the chart rebuilds.
-        QTimer.singleShot(0, self._scroll_to_today)
+        """Re-render the chart when the project-ID filter changes.
 
-    def _render_filtered(self) -> None:
+        Preserve the current scroll position — filtering shouldn't jump the view.
+        """
+        self._render_filtered(preserve_view=True)
+
+    def _render_filtered(self, preserve_view: bool = False) -> None:
         """Push the (optionally project-filtered) rows into the chart."""
         if self._date_window is None:
             return
 
         rows = self._filter_rows(self.search_input.text())
+        # Match the Cells Mapping badge: count operational cells (everything
+        # except In repair), not the raw total.
+        operational = sum(
+            1 for r in rows
+            if (r.get("status") or "").strip().lower() != "in repair"
+        )
         self.count_badge.setText(
-            f"{len(rows)} cell{'s' if len(rows) != 1 else ''}"
+            f"{operational} operational cell{'s' if operational != 1 else ''}"
         )
 
         min_date, max_date, floor_date = self._date_window
-        self.gantt.set_data(rows, min_date, max_date, floor_date)
+        self.gantt.set_data(
+            rows, min_date, max_date, floor_date, preserve_view=preserve_view
+        )
 
     def _filter_rows(self, text: str) -> list:
         """Filter rows by project ID.
@@ -182,7 +208,11 @@ class StationSummary(QWidget):
                 if needle in (ep.get("project") or "").lower()
             ]
             if matching:
-                filtered.append({"channel": row["channel"], "episodes": matching})
+                filtered.append({
+                    "channel": row["channel"],
+                    "status": row.get("status", ""),
+                    "episodes": matching,
+                })
         return filtered
 
     def _build_stats(self) -> None:
@@ -211,9 +241,167 @@ class StationSummary(QWidget):
 
     # ------------------------------------------------------- Interactions
     def _on_episode_activated(self, episode: dict) -> None:
-        """Open a read-only details window for a double-clicked bar."""
+        """Open a details window for a double-clicked bar; delete/modify on request."""
         dialog = EpisodeInfoDialog(episode, self)
         dialog.exec()
+        if dialog.delete_requested:
+            self._delete_episode(episode)
+        elif dialog.modify_requested:
+            self._modify_episode(episode)
+
+    def _modify_episode(self, episode: dict) -> None:
+        """Open the cell editor on this episode; save to the history, not the cell."""
+        episode_id = (episode.get("data") or {}).get("id")
+        if not episode_id or self.cells_manager is None:
+            QMessageBox.warning(
+                self, "Could not modify",
+                "Couldn't determine which entry to edit.",
+            )
+            return
+        table = self._episode_as_table(episode)
+        # Episodes are experiments: hide cell-only states (Available / In repair).
+        dialog = EditRowDialog(
+            table, 0, self.cells_manager, self, is_add_mode=False,
+            status_choices=CellStatus.experiment_values(),
+        )
+        saved = []
+        dialog.row_saved.connect(saved.append)
+        dialog.exec()
+        # Persist + refresh only after the editor has fully closed, so the chart
+        # rebuild runs in the normal event loop (not the dialog's modal loop),
+        # where the viewport geometry is settled and the overlays land correctly.
+        if saved:
+            self._save_episode_edit(episode_id, episode, saved[-1])
+
+    def _episode_as_table(self, episode: dict) -> QTableWidget:
+        """1-row table of the episode's values, in the cell editor's columns."""
+        cols = self.cells_manager.get_column_names()
+        mapping = self.cells_manager.COLUMNS_MAPPING
+        data = episode.get("data", {})
+        table = QTableWidget(1, len(cols))
+        for i, display in enumerate(cols):
+            key = mapping.get(display, "")
+            value = "" if key == "duration" else str(data.get(key, "") or "")
+            table.setItem(0, i, QTableWidgetItem(value))
+        return table
+
+    def _save_episode_edit(self, episode_id, episode: dict, row_data: list) -> None:
+        """Map the edited cell columns back to history fields and persist."""
+        cols = self.cells_manager.get_column_names()
+        mapping = self.cells_manager.COLUMNS_MAPPING
+        values = {}
+        for i, display in enumerate(cols):
+            key = mapping.get(display)
+            if not key or key == "duration":
+                continue
+            values[key] = row_data[i] if i < len(row_data) else ""
+        # Fields absent from the cell columns: keep the episode's own values.
+        # (row_data has the original filename appended in edit mode.)
+        data = episode.get("data", {})
+        values["end_date"] = str(data.get("end_date", "") or "")
+        # Transitioning into "Test finished" stamps the end at today (an ongoing
+        # bar was only extended to today at render time, so its stored end can be
+        # earlier). Re-saving an already-finished test keeps its stored end.
+        old_status = (data.get("status") or "").strip().lower()
+        if (values.get("status") or "").strip().lower() == "test finished" \
+                and old_status != "test finished":
+            values["end_date"] = date.today().strftime("%Y-%m-%d")
+        original = row_data[len(cols)] if len(row_data) > len(cols) else ""
+        values["original_data_filename"] = (
+            original or str(data.get("original_data_filename", "") or "")
+        )
+        channel = (values.get("channel") or "").strip()
+        print(f"[MODIFY] updating episode id={episode_id} channel={channel!r} "
+              f"values={values}")
+        changes = self._episode_changes(data, values)
+        if self.manager.update_episode(episode_id, values):
+            print(f"[MODIFY] episode id={episode_id} updated OK")
+            self._sync_live_cell(channel, data, row_data[:len(cols)])
+            self.reload_data()
+            self._show_changes_dialog(channel, changes)
+        else:
+            print(f"[MODIFY] episode id={episode_id} update FAILED")
+            QMessageBox.warning(
+                self, "Update failed",
+                "The experiment could not be updated. Please try again.",
+            )
+
+    def _sync_live_cell(self, channel: str, data: dict, cell_row: list) -> None:
+        """Mirror the edit onto the channel's cell when this is its live episode.
+
+        Only the latest experiment per channel lives in ``icm.cells``, matched by
+        data_filename. Past episodes and cleared cells (blank/other filename)
+        don't match, so they're left untouched. No filename → can't identify the
+        live cell → no sync.
+        """
+        episode_filename = str(data.get("data_filename") or "").strip()
+        if not episode_filename:
+            return
+        cell = self.cells_manager.get_cell_by_channel(channel)
+        if (cell.get("data_filename") or "").strip() != episode_filename:
+            return  # not this channel's current experiment
+        try:
+            self.cells_manager.update_row_by_channel(cell_row)
+            print(f"[MODIFY] synced live cell for channel={channel!r}")
+        except Exception as e:  # best-effort: history is already updated
+            print(f"[MODIFY] cell sync FAILED for channel={channel!r}: {e}")
+
+    # Fields compared for the post-save "what changed" summary (Channel is
+    # read-only; id / original_data_filename are internal).
+    _CHANGE_LABELS = [
+        ("project_id", "Project ID"),
+        ("current_owner", "Current owner"),
+        ("assembled_by", "Assembled by"),
+        ("status", "Status"),
+        ("start_date", "Start date"),
+        ("start_hour", "Start hour"),
+        ("end_date", "End date"),
+        ("expected_end_date", "Expected end date"),
+        ("cathode", "Cathode"),
+        ("anode", "Anode"),
+        ("separator", "Separator"),
+        ("added_water_b", "Added water by timing"),
+        ("data_filename", "Data filename"),
+        ("comments", "Comments"),
+    ]
+
+    def _episode_changes(self, old_data: dict, new_values: dict) -> list:
+        """Return ``[(label, old, new), ...]`` for fields whose value changed."""
+        changes = []
+        for key, label in self._CHANGE_LABELS:
+            old = str(old_data.get(key, "") or "").strip()
+            new = str(new_values.get(key, "") or "").strip()
+            if old != new:
+                changes.append((label, old, new))
+        return changes
+
+    def _show_changes_dialog(self, channel: str, changes: list) -> None:
+        """Show an OK-only styled summary of what was changed (Station Summary only)."""
+        ChangesDialog(channel, changes, self).exec()
+
+    def _delete_episode(self, episode: dict) -> None:
+        """Delete the episode's history row (confirmed in the dialog) + refresh."""
+        data = episode.get("data") or {}
+        episode_id = data.get("id")
+        if not episode_id:
+            QMessageBox.warning(
+                self, "Could not delete",
+                "Couldn't determine which entry to delete.",
+            )
+            return
+        channel = (data.get("channel") or "").strip()
+        filename = (data.get("data_filename") or "").strip()
+        print(f"[DELETE] deleting episode id={episode_id} channel={channel!r} "
+              f"filename={filename!r} status={(data.get('status') or '').strip()!r}")
+        if self.manager.delete_episode(episode_id):
+            print(f"[DELETE] episode id={episode_id} deleted OK")
+            self.reload_data()
+        else:
+            print(f"[DELETE] episode id={episode_id} delete FAILED")
+            QMessageBox.warning(
+                self, "Delete failed",
+                "The entry could not be deleted. Please try again.",
+            )
 
     # -------------------------------------------------------------- Helpers
     def _scroll_to_today(self) -> None:
@@ -254,8 +442,8 @@ class StationSummary(QWidget):
 
     # ----------------------------------------------------------- Data ops
     def reload_data(self) -> None:
-        """Reload data from the manager (called when external changes occur)."""
-        self._refresh()
+        """Reload data (after edits / external changes); keeps the current view."""
+        self._refresh(preserve_view=True)
 
     def log_channel_usage(self, channel: str, row_data: dict) -> None:
         """Log a channel usage and refresh the view.

@@ -231,6 +231,32 @@ DIALOG_STYLE = """
         background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
             stop:0 #55BDBD, stop:1 #3FA3A3);
     }
+    /* Year editor on the navigation bar. Without an explicit rule the year
+       number renders invisibly (white/clipped) while editing, so the user
+       can't see the year they're changing. Give it a solid white field with
+       dark text and enough width for four digits. */
+    QCalendarWidget QSpinBox {
+        background-color: #FFFFFF;
+        color: #1F2A33;
+        border: 1px solid #D8E2E8;
+        border-radius: 6px;
+        min-width: 64px;
+        padding: 2px 6px;
+        margin: 4px 2px;
+        font-size: 13px;
+        selection-background-color: #BFE6E6;
+        selection-color: #0B3B3B;
+    }
+    QCalendarWidget QSpinBox::up-button {
+        subcontrol-origin: border;
+        subcontrol-position: top right;
+        width: 16px;
+    }
+    QCalendarWidget QSpinBox::down-button {
+        subcontrol-origin: border;
+        subcontrol-position: bottom right;
+        width: 16px;
+    }
     QCalendarWidget QAbstractItemView:enabled {
         selection-background-color: #BFE6E6;
         selection-color: #0B3B3B;

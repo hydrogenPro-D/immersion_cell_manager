@@ -15,8 +15,8 @@ from src.gui.widgets.field_types import FieldSpec, FieldType
 # DB columns on icm.cells (in a stable order; ``duration`` is computed, not stored).
 CELL_COLUMNS = [
     "channel", "status", "project_id", "current_owner", "assembled_by",
-    "start_date", "start_hour", "cathode", "anode", "data_filename",
-    "added_water_b", "comments", "separator",
+    "start_date", "start_hour", "expected_end_date", "cathode", "anode",
+    "data_filename", "added_water_b", "comments", "separator",
 ]
 
 
@@ -33,6 +33,7 @@ class ImmersionCellsManager:
         "Start date": "start_date",
         "Start hour": "start_hour",
         "Duration": "duration",
+        "Expected end date": "expected_end_date",
         "Cathode": "cathode",
         "Anode": "anode",
         "Data filename": "data_filename",
@@ -58,6 +59,10 @@ class ImmersionCellsManager:
             name="Start hour",
             field_type=FieldType.TEXT,
             read_only=True,  # Read-only because it's edited via the date picker
+        ),
+        "Expected end date": FieldSpec(
+            name="Expected end date",
+            field_type=FieldType.DATE_ONLY,  # optional planned end (can be blank)
         ),
         "Duration": FieldSpec(
             name="Duration",
@@ -174,6 +179,27 @@ class ImmersionCellsManager:
             return f"{total_seconds // 3600}h"
         except (ValueError, AttributeError):
             return ""
+
+    def filename_exists(self, data_filename: str, exclude_id=None) -> bool:
+        """Return True if ``data_filename`` is already used by an experiment.
+
+        Calls ``usp_history_filename_exists`` (migration 012) — data_filename is a
+        unique key. Fails open (returns False) if the check can't run, so a
+        missing proc never blocks saving.
+        """
+        name = (data_filename or "").strip()
+        if not name:
+            return False
+        try:
+            row = self._db.fetch_row(
+                "EXEC [icm].[usp_history_filename_exists] "
+                "@data_filename = ?, @exclude_id = ?",
+                (name, exclude_id),
+            )
+            return bool(row and int(row.get("match_count", 0) or 0) > 0)
+        except DatabaseError as e:
+            print(f"filename_exists check unavailable (allowing save): {e}")
+            return False
 
     def get_cell_by_channel(self, channel: str) -> dict:
         """Get a specific immersion cell by its channel ID (or {} if missing)."""

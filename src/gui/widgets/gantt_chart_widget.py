@@ -27,14 +27,28 @@ from PyQt6.QtWidgets import (
     QStyle,
     QProxyStyle,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QEvent, QRect
-from PyQt6.QtGui import QColor, QPainter, QPen, QLinearGradient
+from PyQt6.QtCore import Qt, pyqtSignal, QEvent, QRect, QRectF
+from PyQt6.QtGui import QColor, QPainter, QPen, QPainterPath, QLinearGradient
 
 from src.data.enums import CellStatus
 
 # Shared accent palette for the "today" highlight.
 TODAY_ACCENT = "#3FA3A3"
 TODAY_ACCENT_DARK = "#2C8585"
+
+# Whole-row tint by the channel's current cell status. Colorblind-safe pairing
+# (Okabe–Ito): a bluish green vs. an orange-red (vermillion), which differ on the
+# blue-yellow axis and in lightness, so red-green colorblind users can tell them
+# apart. RGBA so the wash sits behind the episode bars.
+STATUS_ROW_TINTS = {
+    "available": (0, 158, 115, 66),   # bluish green
+    "in repair": (213, 94, 0, 68),    # vermillion / orange-red
+}
+# Solid tint for the channel-name cell on the left, same two statuses.
+STATUS_NAME_TINTS = {
+    "available": "#D3EFE6",  # light bluish green
+    "in repair": "#F8DDC4",  # light vermillion
+}
 
 
 class _FastTooltipStyle(QProxyStyle):
@@ -148,6 +162,80 @@ class _TodayColumnOverlay(QWidget):
         painter.drawLine(right, 0, right, height)
 
 
+class _StatusRowOverlay(QWidget):
+    """Transparent overlay painting per-row status tint bands over the grid.
+
+    Kept lowered under the episode bars so the wash shows around them.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._bands = []  # list of (y, height, QColor)
+
+    def set_bands(self, bands) -> None:
+        self._bands = bands
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        if not self._bands:
+            return
+        painter = QPainter(self)
+        width = self.width()
+        for y, height, color in self._bands:
+            painter.fillRect(QRect(0, y, width, height), color)
+
+
+class _ExpectedExtension(QLabel):
+    """Planned-end extension drawn past a bar's actual end.
+
+    Painted by hand because Qt style sheets can't set dash spacing: the fill is
+    the bar's own color at low opacity, and the outline is a sparse, translucent
+    dashed stroke in the same color so it reads as a faint "planned" hint. The
+    left edge is left flush and open (square corners, no border) so the shape
+    reads as a continuation of the bar rather than a separate box.
+    """
+
+    RADIUS = 4
+
+    def __init__(self, rgb, parent=None):
+        super().__init__("", parent)
+        self._rgb = rgb  # (r, g, b) of the parent bar
+
+    def _shape(self, rect, closed: bool) -> QPainterPath:
+        """Rect rounded on the right only. Open on the left when not closed."""
+        rad = self.RADIUS
+        path = QPainterPath()
+        path.moveTo(rect.left(), rect.top())
+        path.lineTo(rect.right() - rad, rect.top())
+        path.quadTo(rect.right(), rect.top(), rect.right(), rect.top() + rad)
+        path.lineTo(rect.right(), rect.bottom() - rad)
+        path.quadTo(rect.right(), rect.bottom(), rect.right() - rad, rect.bottom())
+        path.lineTo(rect.left(), rect.bottom())
+        if closed:
+            path.closeSubpath()  # fill needs the left edge; the outline omits it
+        return path
+
+    def paintEvent(self, event) -> None:
+        r, g, b = self._rgb
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        # Flush on the left (x=0) so it butts against the bar; 2px top/bottom to
+        # match the bar's margin; 2px on the right for the rounded cap.
+        rect = QRectF(self.rect()).adjusted(0, 2, -2, -2)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(r, g, b, 30))
+        painter.drawPath(self._shape(rect, closed=True))
+        pen = QPen(QColor(r, g, b, 140))
+        pen.setWidthF(1.2)
+        pen.setStyle(Qt.PenStyle.CustomDashLine)
+        pen.setDashPattern([3, 5])  # short dash, wide gap → sparse outline
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        outline = rect.adjusted(0, 0.6, -0.6, -0.6)  # inset so stroke isn't clipped
+        painter.drawPath(self._shape(outline, closed=False))
+
+
 class GanttChartWidget(QWidget):
     """Reusable Gantt chart with sticky row + column headers."""
 
@@ -163,6 +251,14 @@ class GanttChartWidget(QWidget):
     HEADER_HEIGHT = 48           # tall enough for the two-line week/day header
     CHANNEL_COL_WIDTH = 80
 
+    # Zoom scales row height + row/bar fonts (the day-column width stays fixed).
+    BASE_ROW_HEIGHT = 30
+    BASE_BAR_FONT = 11           # px, bar label text
+    BASE_CHANNEL_FONT = 12       # px, channel-name text
+    MIN_ZOOM = 0.7
+    MAX_ZOOM = 2.0
+    ZOOM_STEP = 0.10
+
     # How many older days to load each time the user scrolls to the left edge.
     PAST_LOAD_DAYS = 90
     # Distance (in day columns) from the left edge that triggers a past load.
@@ -174,19 +270,31 @@ class GanttChartWidget(QWidget):
         self._max_date = None
         self._today_col = None
         self._today_overlay = None
+        self._status_overlay = None
         # Lazy "load more history on scroll-left" state.
         self._rows = []
         self._loaded_min = None   # left edge currently rendered
         self._floor = None        # oldest date we may scroll back to
         self._extending = False   # re-entrancy guard while rebuilding
+        self._rendering = False   # true while _render is building the tables
         self._syncing = False
         self._selecting = False
-        # Maps (row, start_col) -> {"label", "bg", "fg", "span"} for hover.
+        # Every bar entry {"row","start_col","span","label","bg","fg"} in creation
+        # order — the authoritative list for destroying/repositioning ALL bars
+        # (multiple episodes can share a (row, start_col), so a dict alone would
+        # drop the colliding ones and leak them as ghosts).
+        self._bar_widgets = []
+        # (row, start_col) -> the same entry, for hover lookup (last one wins).
         self._bars = {}
         self._hovered_key = None
         # Shared style that makes tooltips pop up quickly (kept as an attribute
         # so it isn't garbage-collected while widgets reference it).
         self._fast_tooltip_style = _FastTooltipStyle()
+        # Zoom state (row height + fonts). ROW_HEIGHT shadows the class default so
+        # every self.ROW_HEIGHT use picks up the zoomed value.
+        self._zoom = 1.0
+        self.ROW_HEIGHT = self.BASE_ROW_HEIGHT
+        self._bar_font_px = self.BASE_BAR_FONT
         self._init_ui()
 
     # ----------------------------------------------------------------- UI
@@ -235,6 +343,13 @@ class GanttChartWidget(QWidget):
         self.timeline_table.setHorizontalHeader(self._timeline_header)
         self._configure_common(self.timeline_table)
         layout.addWidget(self.timeline_table, 1)
+
+        # Overlay tinting whole rows by the channel's current status. Created
+        # first and kept lowered so episode bars render on top of the wash.
+        self._status_overlay = _StatusRowOverlay(self.timeline_table.viewport())
+        self._status_overlay.setGeometry(self.timeline_table.viewport().rect())
+        self._status_overlay.lower()
+        self._status_overlay.show()
 
         # Overlay that paints the vertical "today" band over the grid.
         self._today_overlay = _TodayColumnOverlay(self.timeline_table.viewport())
@@ -300,6 +415,7 @@ class GanttChartWidget(QWidget):
         )
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        table.setAutoScroll(False)
         table.setVerticalScrollMode(
             QAbstractItemView.ScrollMode.ScrollPerPixel
         )
@@ -439,15 +555,57 @@ class GanttChartWidget(QWidget):
                 self._restore_hover()
             elif event.type() == QEvent.Type.Resize:
                 self._update_today_overlay()
+                self._update_status_overlay()
+                self._reposition_bars()
         return super().eventFilter(obj, event)
 
     # ------------------------------------------------------------- Styling
     def _bar_style(self, bg: str, fg: str) -> str:
         """Stylesheet for an episode bar label in the given colors."""
         return (
-            f"background: {bg}; color: {fg}; font-size: 11px;"
+            f"background: {bg}; color: {fg}; font-size: {self._bar_font_px}px;"
+            " border: 1px solid #000000;"
             " border-radius: 4px; margin: 2px; padding: 0 6px;"
         )
+
+    # --------------------------------------------------------------- Zoom
+    def set_zoom(self, zoom: float) -> float:
+        """Scale row height + row/bar fonts by ``zoom`` and re-render.
+
+        The day-column width is intentionally left fixed. Returns the clamped
+        zoom actually applied.
+        """
+        zoom = max(self.MIN_ZOOM, min(self.MAX_ZOOM, zoom))
+        self._zoom = zoom
+        self.ROW_HEIGHT = round(self.BASE_ROW_HEIGHT * zoom)
+        self._bar_font_px = max(7, round(self.BASE_BAR_FONT * zoom))
+
+        for table in (self.timeline_table, self.channel_table):
+            table.verticalHeader().setDefaultSectionSize(self.ROW_HEIGHT)
+        cf = self.channel_table.font()
+        cf.setPixelSize(max(8, round(self.BASE_CHANNEL_FONT * zoom)))
+        self.channel_table.setFont(cf)
+
+        # Rebuild so the new row height + bar font take effect, keeping the view.
+        if self._min_date is not None:
+            self.set_data(
+                self._rows, self._loaded_min, self._max_date, self._floor,
+                preserve_view=True,
+            )
+        return zoom
+
+    def zoom_step(self, direction: int) -> float:
+        """Zoom in (direction>0) or out (direction<0) by one step."""
+        return self.set_zoom(self._zoom + direction * self.ZOOM_STEP)
+
+    @staticmethod
+    def _hex_rgb(hex_color: str):
+        """Return ``(r, g, b)`` for a ``#RRGGBB`` string (teal on failure)."""
+        h = (hex_color or "").lstrip("#")
+        try:
+            return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        except (ValueError, IndexError):
+            return 63, 163, 163
 
     def _darken(self, hex_color: str, factor: float = None) -> str:
         """Return ``hex_color`` multiplied toward black by ``factor``."""
@@ -470,6 +628,7 @@ class GanttChartWidget(QWidget):
         min_date: date,
         max_date: date,
         floor_date: date = None,
+        preserve_view: bool = False,
     ) -> None:
         """Populate the chart.
 
@@ -480,32 +639,96 @@ class GanttChartWidget(QWidget):
         the oldest date the chart may lazily scroll back to; older days are
         loaded ``PAST_LOAD_DAYS`` at a time as the user reaches the left edge.
         Defaults to ``min_date`` (no lazy history).
+
+        With ``preserve_view`` the currently-loaded left edge and scroll offsets
+        are kept, so a refresh doesn't snap the view back to today.
         """
         self._rows = rows
         self._max_date = max_date
-        self._loaded_min = min_date
         self._floor = floor_date if floor_date is not None else min_date
+
+        if preserve_view and self._min_date is not None:
+            hbar = self.timeline_table.horizontalScrollBar()
+            vbar = self.timeline_table.verticalScrollBar()
+            keep_h, keep_v = hbar.value(), vbar.value()
+            # Keep the current left edge (it may be lazily extended into the past).
+            self._render()
+            # Restore scroll + bar positions synchronously, so no event-loop tick
+            # paints the reset (scroll=0) state — avoids a one-frame flash.
+            # executeDelayedItemsLayout forces the rebuilt table's scrollbar range
+            # to be final first, so setValue isn't clamped against a stale maximum.
+            self._rendering = True  # suppress lazy past-load during the restore
+            try:
+                # Finalize the rebuilt table's scrollbar range, then restore scroll.
+                self.timeline_table.executeDelayedItemsLayout()
+                self.channel_table.executeDelayedItemsLayout()
+                hbar.setValue(min(keep_h, hbar.maximum()))
+                vbar.setValue(min(keep_v, vbar.maximum()))
+                # The rebuild leaves the header offsets stuck at 0 while the
+                # scrollbars hold the restored values, so the grid/date-axis would
+                # paint at the wrong scroll (bars right, dates wrong). Push the
+                # scroll values into the header offsets — what a resize does
+                # internally — so grid, overlays and bars share one scroll.
+                self.timeline_table.horizontalHeader().setOffset(hbar.value())
+                self.timeline_table.verticalHeader().setOffset(vbar.value())
+                self.channel_table.verticalHeader().setOffset(
+                    self.channel_table.verticalScrollBar().value()
+                )
+                self._reposition_bars()
+            finally:
+                self._rendering = False
+            self._update_today_overlay()
+            self._update_status_overlay()
+            self.timeline_table.viewport().update()
+            return
+
+        self._loaded_min = min_date
         self._render()
 
     def _render(self) -> None:
         """(Re)build both tables for the currently loaded date window."""
-        min_date = self._loaded_min
-        max_date = self._max_date
-        self._min_date = min_date
+        # Re-entrancy guard: building the table moves the scrollbar, which fires
+        # valueChanged -> _maybe_load_past synchronously. Without this it could
+        # rebuild the table mid-render and corrupt the bar spans.
+        self._rendering = True
+        try:
+            min_date = self._loaded_min
+            max_date = self._max_date
+            self._min_date = min_date
 
-        days = self._build_day_list(min_date, max_date)
-        day_index = {d: i for i, d in enumerate(days)}
-        self._today_col = day_index.get(date.today())
+            days = self._build_day_list(min_date, max_date)
+            day_index = {d: i for i, d in enumerate(days)}
+            self._today_col = day_index.get(date.today())
 
-        self._build_channel_table(self._rows)
-        self._build_timeline_table(
-            self._rows, days, day_index, min_date, max_date
-        )
+            self._build_channel_table(self._rows)
+            self._build_timeline_table(
+                self._rows, days, day_index, min_date, max_date
+            )
 
-        self._timeline_header.set_today_col(
-            self._today_col if self._today_col is not None else -1
-        )
-        self._update_today_overlay()
+            # The rebuild reset the scrollbars to 0 with signals blocked, leaving
+            # the header offsets stuck at the pre-rebuild scroll. Push the scroll
+            # values back into the offsets so the grid/date axis (positioned via
+            # columnViewportPosition -> header offset) and the bars (positioned via
+            # the scrollbar value) share one offset. Without this the bars misalign
+            # with the grid and the today marker lands off-screen after a filter.
+            self.timeline_table.horizontalHeader().setOffset(
+                self.timeline_table.horizontalScrollBar().value()
+            )
+            self.timeline_table.verticalHeader().setOffset(
+                self.timeline_table.verticalScrollBar().value()
+            )
+            self.channel_table.verticalHeader().setOffset(
+                self.channel_table.verticalScrollBar().value()
+            )
+
+            self._timeline_header.set_today_col(
+                self._today_col if self._today_col is not None else -1
+            )
+            self._update_today_overlay()
+            self._update_status_overlay()
+            self._reposition_bars()
+        finally:
+            self._rendering = False
 
     def scroll_to_date(self, target: date, view_fraction: float = 0.75) -> None:
         """Scroll horizontally so ``target`` sits at ``view_fraction`` across."""
@@ -520,22 +743,39 @@ class GanttChartWidget(QWidget):
         target_x = target_pixel_x - int(viewport_width * view_fraction)
 
         bar = self.timeline_table.horizontalScrollBar()
+        # After a rebuild the scrollbar range isn't final yet, so clamping against
+        # a stale maximum would pin the view to the far left. Force the range to
+        # settle first (same fix the preserve-view restore uses).
+        self.timeline_table.executeDelayedItemsLayout()
         target_x = max(0, min(target_x, bar.maximum()))
         bar.setValue(target_x)
+        # After a rebuild Qt defers the header-offset update (scrollContentsBy), so
+        # setValue moves our bars (via _on_horizontal_scroll) while the date grid
+        # stays at the old offset — they disagree by the scroll amount. Force the
+        # offset to match now and repaint, mirroring the preserve-view restore.
+        self.timeline_table.horizontalHeader().setOffset(bar.value())
+        self._reposition_bars()
+        self._update_today_overlay()
+        self._update_status_overlay()
+        self.timeline_table.viewport().update()
 
     # ------------------------------------------------- Lazy history loading
     def _on_horizontal_scroll(self, value: int) -> None:
-        """React to horizontal scrolling: keep the band aligned, load history."""
+        """React to horizontal scrolling: keep the bands aligned, load history."""
         self._update_today_overlay()
+        self._update_status_overlay()
+        self._reposition_bars()
         self._maybe_load_past(value)
 
     def _on_vertical_scroll(self, _value: int) -> None:
         """Keep the today band spanning the full viewport while scrolling down."""
         self._update_today_overlay()
+        self._update_status_overlay()
+        self._reposition_bars()
 
     def _maybe_load_past(self, value: int) -> None:
         """Load older history when the viewport nears the left edge."""
-        if self._extending:
+        if self._extending or self._rendering:
             return
         if self._loaded_min is None or self._floor is None:
             return
@@ -590,6 +830,58 @@ class GanttChartWidget(QWidget):
         # top whenever we reposition it.
         self._today_overlay.raise_()
 
+    def _reposition_bars(self) -> None:
+        """Place every bar (a viewport child we own) at its cell's viewport rect.
+
+        Computed directly from DAY_WIDTH/ROW_HEIGHT and the scroll offsets. Called
+        on every render, scroll and resize, so the bars always track the grid.
+        """
+        hoff = self.timeline_table.horizontalScrollBar().value()
+        voff = self.timeline_table.verticalScrollBar().value()
+        for bar in self._bar_widgets:
+            label = bar.get("label")
+            if label is None:
+                continue
+            x = bar["start_col"] * self.DAY_WIDTH - hoff
+            y = bar["row"] * self.ROW_HEIGHT - voff
+            label.setGeometry(x, y, bar["span"] * self.DAY_WIDTH, self.ROW_HEIGHT)
+
+    def _update_status_overlay(self) -> None:
+        """Resize the status overlay and rebuild its per-row tint bands."""
+        overlay = self._status_overlay
+        if overlay is None:
+            return
+        viewport = self.timeline_table.viewport()
+        overlay.setGeometry(viewport.rect())
+
+        bands = []
+        for r, row in enumerate(self._rows):
+            tint = STATUS_ROW_TINTS.get((row.get("status") or "").strip().lower())
+            if tint is None:
+                continue
+            y = self.timeline_table.rowViewportPosition(r)
+            h = self.timeline_table.rowHeight(r)
+            if h <= 0 or y + h < 0 or y > viewport.height():
+                continue  # off-screen row
+            bands.append((y, h, self._opaque_status_color(tint)))
+        overlay.set_bands(bands)
+        overlay.lower()  # keep under the bars
+
+    @staticmethod
+    def _opaque_status_color(rgba) -> QColor:
+        """Flatten an RGBA row tint over the table's white base into a solid color.
+
+        Filling the band opaquely keeps a status (red / green) row the same shade
+        regardless of the alternating zebra colour underneath it.
+        """
+        r, g, b, a = rgba
+        f = a / 255.0
+        return QColor(
+            round(r * f + 255 * (1 - f)),
+            round(g * f + 255 * (1 - f)),
+            round(b * f + 255 * (1 - f)),
+        )
+
     # ------------------------------------------------------- Table builders
     def _build_channel_table(self, rows: list) -> None:
         self.channel_table.setRowCount(len(rows))
@@ -598,27 +890,41 @@ class GanttChartWidget(QWidget):
             item.setTextAlignment(
                 Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
             )
+            tint = STATUS_NAME_TINTS.get((row.get("status") or "").strip().lower())
+            if tint:
+                item.setBackground(QColor(tint))
             self.channel_table.setItem(r, 0, item)
 
     def _build_timeline_table(
         self, rows, days, day_index, min_date, max_date
     ) -> None:
         table = self.timeline_table
-        # Fully tear down the previous render first. clearSpans() only drops the
-        # spans and setRowCount/setColumnCount keep existing cells when the
-        # counts are unchanged, so stale QLabel cell widgets from a previous
-        # build would survive and show up as leftover single-day bars. Collapsing
-        # to zero rows/columns destroys those cell widgets before we rebuild.
-        table.clearSpans()
-        table.setRowCount(0)
-        table.setColumnCount(0)
-        table.setRowCount(len(rows))
-        table.setColumnCount(len(days))
-        table.setHorizontalHeaderLabels(self._build_day_labels(days))
-
-        # Forget bars from the previous render (their widgets are destroyed).
+        # Remove the previous render's bar widgets up front (viewport children we
+        # own; setRowCount(0) won't drop them). Clear self._bars BEFORE anything
+        # else so a stray _reposition_bars can't touch a pending-delete label.
+        for bar in self._bar_widgets:
+            lbl = bar.get("label")
+            if lbl is not None:
+                lbl.hide()
+                lbl.deleteLater()
+        self._bar_widgets = []
         self._bars = {}
         self._hovered_key = None
+
+        # Tear down the previous render's rows/columns. Block the scrollbar's
+        # signals while the counts change so the emitted valueChanged can't
+        # trigger lazy loading in the middle of a build.
+        hbar = table.horizontalScrollBar()
+        hbar.blockSignals(True)
+        try:
+            table.clearSpans()
+            table.setRowCount(0)
+            table.setColumnCount(0)
+            table.setRowCount(len(rows))
+            table.setColumnCount(len(days))
+        finally:
+            hbar.blockSignals(False)
+        table.setHorizontalHeaderLabels(self._build_day_labels(days))
 
         header = table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
@@ -683,7 +989,7 @@ class GanttChartWidget(QWidget):
             Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
         )
         label.setAlignment(
-            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight
         )
         label.setStyleSheet(self._bar_style(bg, fg))
         tooltip_lines = [episode["label"] or "(no label)"]
@@ -709,15 +1015,49 @@ class GanttChartWidget(QWidget):
         item.setData(Qt.ItemDataRole.UserRole + 1, span)
         table.setItem(r, start_col, item)
 
-        table.setCellWidget(r, start_col, label)
+        # Parent the bar to the viewport and manage its geometry ourselves (see
+        # _reposition_bars) instead of setCellWidget: Qt owns the geometry of
+        # index widgets and re-places them from columnViewportPosition, which
+        # lags the scrollbar after a rebuild — so it kept shoving bars into the
+        # future until a resize. As our own child, nothing overrides us.
+        label.setParent(table.viewport())
+        label.show()
 
-        # Remember the bar so we can darken it on hover and restore it later.
-        self._bars[(r, start_col)] = {
+        # Track the bar. The list holds every bar (so all get destroyed and
+        # repositioned even when several share a (row, start_col)); the dict is
+        # for hover lookup, where last-one-at-a-key wins.
+        entry = {
+            "row": r,
+            "start_col": start_col,
+            "span": span,
             "label": label,
             "bg": bg,
             "fg": fg,
-            "span": span,
         }
+        self._bar_widgets.append(entry)
+        self._bars[(r, start_col)] = entry
+
+        # Dashed extension out to the planned (expected) end date, when it's
+        # beyond the bar's actual end and within the loaded window.
+        expected = episode.get("expected_end")
+        if expected is not None and expected > visible_end:
+            ext_start = visible_end + timedelta(days=1)
+            ext_end = min(expected, max_date)
+            if ext_end >= ext_start and ext_start in day_index:
+                ext_col = day_index[ext_start]
+                ext_span = (ext_end - ext_start).days + 1
+                ext = _ExpectedExtension(self._hex_rgb(bg))
+                ext.setStyle(self._fast_tooltip_style)
+                ext.setAttribute(
+                    Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
+                )
+                ext.setToolTip(f"Expected end: {expected.isoformat()}")
+                ext.setParent(table.viewport())
+                ext.show()
+                self._bar_widgets.append({
+                    "row": r, "start_col": ext_col, "span": ext_span,
+                    "label": ext, "bg": bg, "fg": fg,
+                })
         return True
 
     # -------------------------------------------------------------- Helpers

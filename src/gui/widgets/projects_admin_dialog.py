@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QLineEdit,
+    QTextEdit,
     QPushButton,
     QGraphicsDropShadowEffect,
     QMessageBox,
@@ -162,11 +163,15 @@ class ProjectEditorDialog(QDialog):
 
         description_label = QLabel("DESCRIPTION (OPTIONAL)")
         description_label.setObjectName("FieldLabel")
-        self.description_input = QLineEdit(self.description)
+        # Multi-line, growable box so longer descriptions are visible and the
+        # dialog can be resized to give it more room. Tab leaves the field
+        # instead of inserting a tab character.
+        self.description_input = QTextEdit(self.description)
         self.description_input.setPlaceholderText("Add a description…")
-        self.description_input.returnPressed.connect(self._on_save)
+        self.description_input.setMinimumHeight(90)
+        self.description_input.setTabChangesFocus(True)
         body_layout.addWidget(description_label)
-        body_layout.addWidget(self.description_input)
+        body_layout.addWidget(self.description_input, 1)
 
         body_layout.addStretch(1)
 
@@ -210,7 +215,7 @@ class ProjectEditorDialog(QDialog):
             )
             return
         self.name = name
-        self.description = self.description_input.text().strip()
+        self.description = self.description_input.toPlainText().strip()
         self.accept()
 
     # ---------------------------------------------------- Window dragging
