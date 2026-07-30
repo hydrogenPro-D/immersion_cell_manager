@@ -25,7 +25,7 @@ COLOR_PALETTE = [
 # events would fire a SELECT round-trip to the database. The cache is cleared
 # on any local write (below) and by the GUI when the change poller detects an
 # external change, so it never serves stale colors for long.
-_rows_cache: list[tuple[str, str, str]] | None = None
+_rows_cache: list[tuple[str, str, str, str, str, bool]] | None = None
 
 
 def invalidate_projects_cache() -> None:
@@ -41,42 +41,79 @@ class ProjectsManager:
         self._db = db or get_db()
 
     # ------------------------------------------------------------------ IO
-    def _rows(self) -> list[tuple[str, str, str]]:
-        """Return ``[(name, color, description), ...]`` in insertion order."""
+    def _rows(self) -> list[tuple[str, str, str, str, str, bool]]:
+        """Return ``[(name, color, description, density, fe_ppm, is_archived), ...]``."""
         global _rows_cache
         if _rows_cache is not None:
             return _rows_cache
-        records = self._db.fetch_all(
-            "SELECT project_id, color, description FROM icm.projects ORDER BY id"
-        )
-        rows: list[tuple[str, str, str]] = []
+        try:
+            records = self._db.fetch_all(
+                "SELECT project_id, color, description, density, fe_ppm, is_archived "
+                "FROM icm.projects ORDER BY id"
+            )
+        except DatabaseError:
+            try:
+                # is_archived not migrated yet (016) — read without it.
+                records = self._db.fetch_all(
+                    "SELECT project_id, color, description, density, fe_ppm "
+                    "FROM icm.projects ORDER BY id"
+                )
+            except DatabaseError:
+                # density/fe_ppm not migrated yet (015) either.
+                records = self._db.fetch_all(
+                    "SELECT project_id, color, description FROM icm.projects ORDER BY id"
+                )
+        rows: list[tuple[str, str, str, str, str, bool]] = []
         for i, r in enumerate(records):
             name = to_text(r.get("project_id")).strip()
             if not name:
                 continue
             color = to_text(r.get("color")).strip() or COLOR_PALETTE[i % len(COLOR_PALETTE)]
             description = to_text(r.get("description")).strip()
-            rows.append((name, color, description))
+            density = to_text(r.get("density")).strip()
+            fe_ppm = to_text(r.get("fe_ppm")).strip()
+            is_archived = bool(r.get("is_archived"))
+            rows.append((name, color, description, density, fe_ppm, is_archived))
         _rows_cache = rows
         return rows
 
     # ----------------------------------------------------------- Public API
     def get_projects(self) -> list[str]:
-        """Return the list of project names (in insertion order)."""
-        return [name for name, _, _ in self._rows()]
+        """Active (non-archived) project names — the ones assignable to channels."""
+        return [name for name, _, _, _, _, archived in self._rows() if not archived]
+
+    def get_archived_projects(self) -> list[str]:
+        """Archived project names (kept on existing channels, not assignable)."""
+        return [name for name, _, _, _, _, archived in self._rows() if archived]
 
     def get_project_colors(self) -> dict[str, str]:
-        """Return a mapping of ``{project_name: color_hex}``."""
-        return {name: color for name, color, _ in self._rows()}
+        """``{project_name: color_hex}`` for all projects (archived included)."""
+        return {name: color for name, color, _, _, _, _ in self._rows()}
 
     def get_project_descriptions(self) -> dict[str, str]:
-        """Return a mapping of ``{project_name: description}``."""
-        return {name: description for name, _, description in self._rows()}
+        """``{project_name: description}`` for all projects (archived included)."""
+        return {name: description for name, _, description, _, _, _ in self._rows()}
+
+    def get_project_densities(self) -> dict[str, str]:
+        """``{project_name: density}`` for all projects (archived included)."""
+        return {name: density for name, _, _, density, _, _ in self._rows()}
+
+    def get_project_fe_ppms(self) -> dict[str, str]:
+        """``{project_name: fe_ppm}`` for all projects (archived included)."""
+        return {name: fe_ppm for name, _, _, _, fe_ppm, _ in self._rows()}
 
     def get_description(self, name: str) -> str:
         """Return the description for ``name`` (or empty string if unknown)."""
         name = (name or "").strip()
         return self.get_project_descriptions().get(name, "")
+
+    def get_density(self, name: str) -> str:
+        """Return the electrolyte density for ``name`` (or empty string)."""
+        return self.get_project_densities().get((name or "").strip(), "")
+
+    def get_fe_ppm(self, name: str) -> str:
+        """Return the iron concentration (ppm) for ``name`` (or empty string)."""
+        return self.get_project_fe_ppms().get((name or "").strip(), "")
 
     def get_color(self, name: str) -> str:
         """Return the color for ``name`` (or the default if unknown)."""
@@ -93,7 +130,8 @@ class ProjectsManager:
         return bg, self.foreground_for(bg)
 
     def add_project(self, name: str, color: str | None = None,
-                    description: str | None = None) -> bool:
+                    description: str | None = None, density: str = "",
+                    fe_ppm: str = "") -> bool:
         """Add a project. Returns ``False`` if invalid or it already exists."""
         name = (name or "").strip()
         if not name:
@@ -104,11 +142,27 @@ class ProjectsManager:
         try:
             self._db.exec_proc("usp_project_insert", {
                 "project_id": name, "color": color, "description": description,
+                "density": (density or "").strip(), "fe_ppm": (fe_ppm or "").strip(),
             })
             invalidate_projects_cache()
             return True
         except DatabaseError:
             return False  # most likely the UNIQUE name already exists
+
+    def set_project_specs(self, name: str, density: str, fe_ppm: str) -> bool:
+        """Set a project's density + fe_ppm (empty string clears; others kept)."""
+        name = (name or "").strip()
+        if not name:
+            return False
+        try:
+            self._db.exec_proc("usp_project_update", {
+                "project_id": name, "color": None, "description": None,
+                "density": (density or "").strip(), "fe_ppm": (fe_ppm or "").strip(),
+            })
+            invalidate_projects_cache()
+            return True
+        except DatabaseError:
+            return False
 
     def set_project_color(self, name: str, color: str) -> bool:
         """Update the color of an existing project. Returns False if missing."""
@@ -164,8 +218,30 @@ class ProjectsManager:
         except DatabaseError:
             return False
 
+    def archive_project(self, name: str) -> bool:
+        """Archive a project: keep it on existing channels/history but hide it
+        from the assignment dropdowns. Reversible via :meth:`restore_project`."""
+        return self._set_archived(name, True)
+
+    def restore_project(self, name: str) -> bool:
+        """Un-archive a project so it can be assigned to channels again."""
+        return self._set_archived(name, False)
+
+    def _set_archived(self, name: str, archived: bool) -> bool:
+        name = (name or "").strip()
+        if not name:
+            return False
+        try:
+            self._db.exec_proc("usp_project_set_archived", {
+                "project_id": name, "is_archived": 1 if archived else 0,
+            })
+            invalidate_projects_cache()
+            return True
+        except DatabaseError:
+            return False
+
     def remove_project(self, name: str) -> bool:
-        """Remove a project. Returns False if it wasn't present.
+        """Hard-delete a project (unused by the UI, which archives instead).
 
         The DB FK ``ON DELETE SET NULL`` clears the reference on every cell and
         history row automatically.

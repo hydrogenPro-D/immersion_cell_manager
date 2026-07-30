@@ -41,13 +41,13 @@ TODAY_ACCENT_DARK = "#2C8585"
 # blue-yellow axis and in lightness, so red-green colorblind users can tell them
 # apart. RGBA so the wash sits behind the episode bars.
 STATUS_ROW_TINTS = {
-    "available": (0, 158, 115, 66),   # bluish green
-    "in repair": (213, 94, 0, 68),    # vermillion / orange-red
+    "available": (0, 158, 115, 84),   # bluish green
+    "in repair": (213, 94, 0, 86),    # vermillion / orange-red
 }
 # Solid tint for the channel-name cell on the left, same two statuses.
 STATUS_NAME_TINTS = {
-    "available": "#D3EFE6",  # light bluish green
-    "in repair": "#F8DDC4",  # light vermillion
+    "available": "#C4E9DB",  # light bluish green
+    "in repair": "#F4D2AF",  # light vermillion
 }
 
 
@@ -409,10 +409,9 @@ class GanttChartWidget(QWidget):
         table.verticalHeader().setVisible(False)
         table.verticalHeader().setDefaultSectionSize(self.ROW_HEIGHT)
         table.setShowGrid(False)
-        table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        table.setSelectionBehavior(
-            QAbstractItemView.SelectionBehavior.SelectRows
-        )
+        # No row selection/highlight on click (double-click still opens the
+        # episode, which resolves from the clicked cell, not the selection).
+        table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         table.setAutoScroll(False)

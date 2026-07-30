@@ -20,17 +20,24 @@ from src.gui.widgets.edit_row_dialog import EditRowDialog
 from src.gui.widgets.data_table_widget import DataTableWidget
 from src.gui.widgets.confirm_dialog import ConfirmDialog
 from src.gui.widgets.zoom_control import ZoomControl
+from src.gui.widgets.projects_admin_dialog import ProjectsAdminDialog
 from src.gui.styles.tab_styles import TAB_STYLE
 
 
 class CellsMapping(QWidget):
     def __init__(self, manager, on_channel_logged=None, on_project_removed=None,
-                 on_project_renamed=None):
+                 on_project_renamed=None, on_channels_changed=None,
+                 calibration_manager=None):
         super().__init__()
         self.manager = manager
         self.on_channel_logged = on_channel_logged
         self.on_project_removed = on_project_removed
         self.on_project_renamed = on_project_renamed
+        # Called after a channel is added/deleted, so other tabs (e.g. Channel
+        # Calibration) that mirror the cell list can refresh.
+        self.on_channels_changed = on_channels_changed
+        # Used to flag channels with a stale calibration + block them going In use.
+        self.calibration_manager = calibration_manager
         self.init_ui()
         self.load_data()
         self._refresh_status()
@@ -149,6 +156,16 @@ class CellsMapping(QWidget):
         )
 
         # Action buttons live in the toolbar for a tighter, more modern feel
+        manage_btn = QPushButton("Manage projects")
+        manage_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        manage_btn.setFixedWidth(150)
+        manage_btn.setStyleSheet(
+            "QPushButton { background:#EBEFF2; color:#33404A; border:none;"
+            " border-radius:6px; padding:8px 14px; font-weight:600; }"
+            " QPushButton:hover { background:#DCE3E8; }"
+        )
+        manage_btn.clicked.connect(self._on_manage_projects)
+
         self.add_button = QPushButton("＋  Add Channel")
         self.add_button.setObjectName("PrimaryButton")
         self.add_button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -162,6 +179,7 @@ class CellsMapping(QWidget):
         self.remove_button.setEnabled(False)
         self.remove_button.clicked.connect(self._on_remove_clicked)
 
+        layout.addWidget(manage_btn)
         layout.addWidget(self.add_button)
         layout.addWidget(self.remove_button)
 
@@ -190,10 +208,33 @@ class CellsMapping(QWidget):
         footer.addWidget(hint)
         return footer
 
+    def _on_manage_projects(self):
+        """Open the projects admin dialog, then refresh (density/color/rename)."""
+        dialog = ProjectsAdminDialog(
+            self.manager.get_projects_manager(), self,
+            on_remove=self.on_project_removed,
+            on_rename=self.on_project_renamed,
+        )
+        dialog.exec()
+        self.reload_data()
+
     # ----------------------------------------------------------- Data ops
     def load_data(self):
         """Load data from the manager and populate the table"""
         try:
+            # Refresh calibration flags before repopulating: the "!" on overdue
+            # channels and the yellow row tint on awaiting-decision channels.
+            if self.calibration_manager is not None:
+                try:
+                    self.table.set_stale_channels(
+                        self.calibration_manager.get_stale_channels()
+                    )
+                    self.table.set_pending_channels(
+                        self.calibration_manager.get_pending_channels()
+                    )
+                except Exception:
+                    self.table.set_stale_channels(set())
+                    self.table.set_pending_channels(set())
             table_data = self.manager.get_table_data()
             for row_data in table_data:
                 self.add_row(row_data)
@@ -206,10 +247,17 @@ class CellsMapping(QWidget):
 
     def open_edit_dialog(self, row):
         """Open a dialog to edit row values"""
+        channel = self._channel_for_row(row)
+        stale = bool(channel) and channel in self.table._stale_channels
+        has_cal = bool(channel) and self.calibration_manager is not None
+        pending = has_cal and self.calibration_manager.is_channel_pending(channel)
+        failed = has_cal and self.calibration_manager.is_channel_failed(channel)
         dialog = EditRowDialog(
             self.table, row, self.manager, self,
             on_project_removed=self.on_project_removed,
             on_project_renamed=self.on_project_renamed,
+            calibration_stale=stale, calibration_pending=pending,
+            calibration_failed=failed,
         )
         dialog.row_saved.connect(self._on_row_saved)
         dialog.exec()
@@ -327,6 +375,9 @@ class CellsMapping(QWidget):
                 channel = row_dict.get("Channel", "")
                 if channel:
                     self.on_channel_logged(channel, row_dict)
+            # A new channel appeared — let mirror tabs refresh.
+            if self.on_channels_changed:
+                self.on_channels_changed()
         except Exception as e:
             print(f"Error adding row to JSON: {e}")
 
@@ -384,6 +435,9 @@ class CellsMapping(QWidget):
             return
 
         self._refresh_status()
+        # A channel was removed — let mirror tabs refresh.
+        if self.on_channels_changed:
+            self.on_channels_changed()
 
     def _channel_for_row(self, row: int) -> str:
         """Return the channel value for a given row, or '' if no channel column."""

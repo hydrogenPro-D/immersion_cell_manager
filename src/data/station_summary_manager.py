@@ -68,7 +68,7 @@ class StationSummaryManager:
             rows.append({
                 "channel": channel,
                 "status": to_text(r.get("status")),
-                "episodes": by_channel.get(channel, []),
+                "episodes": self._resolve_episode_bounds(by_channel.get(channel, [])),
             })
         return rows
 
@@ -322,12 +322,6 @@ class StationSummaryManager:
         if status.lower() == "test finished":
             expected_end = None
 
-        # Ongoing experiments run up to today: the stored end_date was frozen at
-        # the day they were last saved, so extend the bar to the current date.
-        # (Finished experiments keep their stored end.)
-        if status.lower() in self.ONGOING_STATUSES:
-            end = max(start, date.today())
-
         # In-repair bars always render red so they stand out, even when the
         # channel still has a project assigned (which would otherwise color the
         # bar by project, or grey when no project is set).
@@ -342,10 +336,37 @@ class StationSummaryManager:
             "project": project,
             "color": color,
             "start": start,
-            "end": end,
+            "end": end,  # stored end; _resolve_episode_bounds sets the rendered end
+            # Ongoing only extends to today for the channel's *latest* episode
+            # (resolved per channel), so stale un-finished rows don't balloon.
+            "ongoing": status.lower() in self.ONGOING_STATUSES,
             "expected_end": expected_end,
             "data": dict(entry),
         }
+
+    def _resolve_episode_bounds(self, episodes: list) -> list:
+        """Make a channel's episodes non-overlapping (two can't run at once).
+
+        Sorted by start (episodes already arrive in start, id order):
+        - only the *latest* episode extends to today (if ongoing), so a stale
+          un-finished older row doesn't stretch across the whole timeline;
+        - every earlier episode's end is clamped to the day before the next one
+          starts (the shared handoff day goes to the newer experiment);
+        - a bar never shrinks below one day, so same-day experiments still show.
+        """
+        eps = sorted(episodes, key=lambda e: e["start"])  # stable: keeps id order
+        today = date.today()
+        for i, ep in enumerate(eps):
+            end = ep["end"]
+            is_last = i == len(eps) - 1
+            if is_last:
+                if ep.get("ongoing"):
+                    end = max(end, today)
+            else:
+                limit = eps[i + 1]["start"] - timedelta(days=1)
+                end = min(end, limit)
+            ep["end"] = max(end, ep["start"])  # never below a single day
+        return eps
 
     def _parse_date(self, text: str):
         """Parse a ``YYYY-MM-DD`` date string, returning ``None`` if invalid."""

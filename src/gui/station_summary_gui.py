@@ -38,12 +38,15 @@ class StationSummary(QWidget):
     # from the left edge). 0.5 = center, >0.5 = right of center.
     TODAY_VIEW_FRACTION = 0.75
 
-    def __init__(self, manager, cells_manager=None):
+    def __init__(self, manager, cells_manager=None, on_cells_changed=None):
         super().__init__()
         self.manager = manager
         # Cells manager: lets us reuse the cell editor (EditRowDialog) to modify
         # an episode, writing to the history instead of the cells table.
         self.cells_manager = cells_manager
+        # Called after this tab writes to a cell (e.g. deleting the current
+        # experiment frees it), so the Cells Mapping tab can refresh right away.
+        self.on_cells_changed = on_cells_changed
         self._initial_scroll_done = False
         # Cache of the unfiltered data + computed axis, so typing in the search
         # box re-filters without re-reading from disk.
@@ -242,12 +245,31 @@ class StationSummary(QWidget):
     # ------------------------------------------------------- Interactions
     def _on_episode_activated(self, episode: dict) -> None:
         """Open a details window for a double-clicked bar; delete/modify on request."""
-        dialog = EpisodeInfoDialog(episode, self)
+        dialog = EpisodeInfoDialog(
+            episode, self, will_free_cell=self._is_current_experiment(episode)
+        )
         dialog.exec()
         if dialog.delete_requested:
             self._delete_episode(episode)
         elif dialog.modify_requested:
             self._modify_episode(episode)
+
+    def _is_current_experiment(self, episode: dict) -> bool:
+        """True if this episode is the channel's current In-use experiment.
+
+        Matched by data filename + the cell being In use, so deleting an old
+        historical episode never frees the cell.
+        """
+        if self.cells_manager is None:
+            return False
+        data = episode.get("data") or {}
+        channel = (data.get("channel") or "").strip()
+        ep_filename = (data.get("data_filename") or "").strip()
+        if not channel or not ep_filename:
+            return False
+        cell = self.cells_manager.get_cell_by_channel(channel)
+        return ((cell.get("status") or "").strip().lower() == "in use"
+                and (cell.get("data_filename") or "").strip() == ep_filename)
 
     def _modify_episode(self, episode: dict) -> None:
         """Open the cell editor on this episode; save to the history, not the cell."""
@@ -292,7 +314,9 @@ class StationSummary(QWidget):
         values = {}
         for i, display in enumerate(cols):
             key = mapping.get(display)
-            if not key or key == "duration":
+            # density/fe_ppm are derived, read-only project columns — not history
+            # fields (usp_history_update has no such params).
+            if not key or key in ("duration", "density", "fe_ppm"):
                 continue
             values[key] = row_data[i] if i < len(row_data) else ""
         # Fields absent from the cell columns: keep the episode's own values.
@@ -390,14 +414,18 @@ class StationSummary(QWidget):
             )
             return
         channel = (data.get("channel") or "").strip()
-        filename = (data.get("data_filename") or "").strip()
-        print(f"[DELETE] deleting episode id={episode_id} channel={channel!r} "
-              f"filename={filename!r} status={(data.get('status') or '').strip()!r}")
+        # Decide before deleting (afterwards the filename match is gone).
+        free_cell = self._is_current_experiment(episode)
         if self.manager.delete_episode(episode_id):
-            print(f"[DELETE] episode id={episode_id} deleted OK")
+            if free_cell and self.cells_manager is not None:
+                try:
+                    self.cells_manager.free_channel(channel)
+                except Exception as e:  # freeing is best-effort; the row is gone
+                    print(f"Error freeing channel {channel} after delete: {e}")
+                if callable(self.on_cells_changed):
+                    self.on_cells_changed()
             self.reload_data()
         else:
-            print(f"[DELETE] episode id={episode_id} delete FAILED")
             QMessageBox.warning(
                 self, "Delete failed",
                 "The entry could not be deleted. Please try again.",
