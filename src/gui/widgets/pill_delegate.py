@@ -17,6 +17,9 @@ from PyQt6.QtWidgets import QStyledItemDelegate, QStyleOptionViewItem
 
 ColorResolver = Callable[[str], tuple[str, str]]
 
+# Set truthy on an item (via setData) to draw a red "!" warning badge on its pill.
+WARN_ROLE = Qt.ItemDataRole.UserRole + 137
+
 
 class PillDelegate(QStyledItemDelegate):
     """Render the item's text as a rounded pill in the resolved colours."""
@@ -30,9 +33,11 @@ class PillDelegate(QStyledItemDelegate):
         radius: int = 11,
         row_padding_x: int = 8,
         row_padding_y: int = 4,
+        enable_hover: bool = True,
     ):
         super().__init__(parent)
         self._resolve = color_resolver
+        self._enable_hover = enable_hover
         self._hp = h_padding
         self._vp = v_padding
         self._radius = radius
@@ -44,6 +49,8 @@ class PillDelegate(QStyledItemDelegate):
         text = index.data(Qt.ItemDataRole.DisplayRole) or ""
         fm = option.fontMetrics
         w = fm.horizontalAdvance(str(text)) + self._hp * 2 + self._row_pad_x * 2
+        if index.data(WARN_ROLE):
+            w += 28  # room for the trailing "!" badge
         h = fm.height() + self._vp * 2 + self._row_pad_y * 2
         return QSize(w, h)
 
@@ -55,14 +62,18 @@ class PillDelegate(QStyledItemDelegate):
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
-        # Selection or hover background for the whole row
+        # Background behind the pill. A row tint set on the item (e.g. the
+        # pending-calibration highlight) wins over hover so hovering a tinted
+        # cell doesn't change its color; selection still takes precedence.
+        brush = index.data(Qt.ItemDataRole.BackgroundRole)
         if option.state & option.state.State_Selected:
-            # Use the same gradient as the table stylesheet
             gradient = QLinearGradient(0, option.rect.top(), 0, option.rect.bottom())
             gradient.setColorAt(0, QColor("#BFE6E6"))
             gradient.setColorAt(1, QColor("#9ED6D6"))
             painter.fillRect(option.rect, gradient)
-        elif option.state & option.state.State_MouseOver:
+        elif brush is not None:
+            painter.fillRect(option.rect, brush)
+        elif self._enable_hover and option.state & option.state.State_MouseOver:
             painter.fillRect(option.rect, QColor("#F4F8FA"))
 
         # Pill geometry — vertically centered, left-aligned with row padding
@@ -87,6 +98,22 @@ class PillDelegate(QStyledItemDelegate):
         font.setWeight(QFont.Weight.DemiBold)
         painter.setFont(font)
         painter.drawText(pill_rect, Qt.AlignmentFlag.AlignCenter, text)
+
+        # Red "!" badge for flagged cells (e.g. a stale calibration), drawn just
+        # to the right of the pill.
+        if index.data(WARN_ROLE):
+            d = min(pill_h, 20)
+            bx = pill_rect.right() + 8
+            by = option.rect.top() + (option.rect.height() - d) // 2
+            badge = QRect(bx, by, d, d)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(QColor("#D32F2F")))
+            painter.drawEllipse(badge)
+            painter.setPen(QColor("#FFFFFF"))
+            bf: QFont = painter.font()
+            bf.setWeight(QFont.Weight.Bold)
+            painter.setFont(bf)
+            painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, "!")
 
         painter.restore()
 

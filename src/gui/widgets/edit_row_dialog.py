@@ -20,6 +20,8 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QTimeEdit,
     QTextEdit,
+    QInputDialog,
+    QAbstractItemView,
 )
 from PyQt6.QtCore import Qt, QDate, QTime, QEvent, pyqtSignal
 from PyQt6.QtGui import QColor, QPixmap, QIcon
@@ -121,6 +123,27 @@ class CalendarDateEdit(QDateEdit):
             "background: transparent; font-size: 15px; border: none;"
         )
         self._icon.adjustSize()
+
+        self._enable_day_hover()
+
+    def _enable_day_hover(self) -> None:
+        """Highlight the calendar day under the cursor (off by default in Qt).
+
+        Qt's calendar view doesn't track the mouse, so no day lights up on hover.
+        Enable tracking and add a hover style scoped to this calendar's grid.
+        """
+        cal = self.calendarWidget()
+        if cal is None:
+            return
+        view = cal.findChild(QAbstractItemView, "qt_calendar_calendarview")
+        if view is not None:
+            view.setMouseTracking(True)
+        cal.setStyleSheet(
+            "QCalendarWidget QAbstractItemView:enabled {"
+            " selection-background-color: #3FA3A3; selection-color: #FFFFFF; }"
+            " QCalendarWidget QAbstractItemView::item:hover {"
+            " background-color: #CDEDED; color: #0B3B3B; }"
+        )
 
     def set_calendar_enabled(self, enabled: bool) -> None:
         """Enable/disable the calendar popup (used for locked fields)."""
@@ -268,6 +291,7 @@ from src.gui.styles.dialog_styles import DIALOG_STYLE
 from src.gui.widgets.field_types import FieldSpec, FieldType
 from src.gui.widgets.pill_combo_box import PillComboBox
 from src.gui.widgets.projects_admin_dialog import ProjectsAdminDialog
+from src.gui.widgets.confirm_dialog import ConfirmDialog
 
 
 # Custom PillComboBox that passes wheel events to parent for scrolling
@@ -301,10 +325,13 @@ class EditRowDialog(QDialog):
     # Extra fields kept for a specific clearing status. In repair keeps Comments
     # so the repair can be documented; Available still fully frees the cell.
     EXTRA_KEPT_ON_CLEAR = {"in repair": ("comments",)}
+    # Fixed width of the field-label column (label-left, input-right layout).
+    LABEL_COLUMN_WIDTH = 160
 
     def __init__(self, table, row, manager, parent=None, is_add_mode=False,
                  on_project_removed=None, on_project_renamed=None,
-                 status_choices=None):
+                 status_choices=None, calibration_stale=False,
+                 calibration_pending=False, calibration_failed=False):
         super().__init__(parent)
         self.table = table
         self.row = row
@@ -312,6 +339,12 @@ class EditRowDialog(QDialog):
         # When set, overrides the Status dropdown options (e.g. the Station
         # Summary editor hides cell-only states like Available / In repair).
         self._status_choices = status_choices
+        # This channel's calibration is older than 3 months: block In use.
+        self._calibration_stale = calibration_stale
+        # This channel has a calibration still awaiting a decision: block In use.
+        self._calibration_pending = calibration_pending
+        # This channel's latest calibration failed: block In use.
+        self._calibration_failed = calibration_failed
         self.columns = manager.get_column_names()
         self.input_fields = {}
         self.is_add_mode = is_add_mode
@@ -356,7 +389,7 @@ class EditRowDialog(QDialog):
         title_text = self._dialog_title()
         self.setWindowTitle(title_text)
         self.setModal(True)
-        self.resize(560, 560)
+        self.resize(800, 650)
 
         # Frameless + translucent so we can render a rounded card with shadow
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.FramelessWindowHint)
@@ -461,7 +494,7 @@ class EditRowDialog(QDialog):
         form_container = QWidget()
         form_layout = QVBoxLayout(form_container)
         form_layout.setContentsMargins(2, 8, 14, 8)
-        form_layout.setSpacing(28)
+        form_layout.setSpacing(10)
 
         # Build all fields and track where to insert banner (after Status field)
         status_field_index = None
@@ -509,10 +542,11 @@ class EditRowDialog(QDialog):
 
         return body
 
-    def _build_field(self, column_name: str) -> QVBoxLayout:
-        wrapper = QVBoxLayout()
-        wrapper.setContentsMargins(0, 0, 0, 0)
-        wrapper.setSpacing(8)
+    def _build_field(self, column_name: str) -> QHBoxLayout:
+        # Label on the left (fixed-width column), editor on the right.
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(12)
 
         spec = self._spec_for(column_name)
         is_channel = column_name.strip().lower() == self.CHANNEL_COLUMN
@@ -525,25 +559,19 @@ class EditRowDialog(QDialog):
 
         label = QLabel(label_text)
         label.setObjectName("FieldLabel")
+        label.setWordWrap(True)
+        label.setFixedWidth(self.LABEL_COLUMN_WIDTH)
+        label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
 
         editor = self._build_editor(spec, read_only=is_read_only)
         self.input_fields[column_name] = editor
 
-        # For Status field, add a warning label and connect change signal
         if column_name.strip().lower() == "status" and isinstance(editor, QComboBox):
-            label_row = QHBoxLayout()
-            label_row.setContentsMargins(0, 0, 0, 0)
-            label_row.setSpacing(6)
-            label_row.addWidget(label)
-
-            wrapper.addLayout(label_row)
             editor.currentTextChanged.connect(self._on_status_changed)
-        else:
-            wrapper.addWidget(label)
 
-        # The Project ID dropdown gets a "manage" button beside it that opens
-        # the projects administration window.
+        # The right-hand side is the editor, optionally with a trailing button.
         is_project = column_name.strip().lower() == self.PROJECT_COLUMN
+        right = editor
         if is_project and isinstance(editor, QComboBox) and not is_read_only:
             # Distinct object name so it renders with a visible dropdown arrow.
             editor.setObjectName("ProjectField")
@@ -564,8 +592,14 @@ class EditRowDialog(QDialog):
             manage_btn.clicked.connect(
                 lambda _checked=False, combo=editor: self._open_projects_admin(combo)
             )
+            # Keep archived projects out of the dropdown list (they may still be
+            # the cell's current value, shown in the closed combo).
+            editor.currentIndexChanged.connect(
+                lambda _idx=0, combo=editor: self._hide_archived_project_items(combo)
+            )
+            self._hide_archived_project_items(editor)
             editor_row.addWidget(manage_btn)
-            wrapper.addLayout(editor_row)
+            right = editor_row
         elif isinstance(editor, OptionalDateEdit) and not is_read_only:
             # Optional date: a Clear button beside it resets it to "not set".
             editor_row = QHBoxLayout()
@@ -581,10 +615,61 @@ class EditRowDialog(QDialog):
                 lambda _checked=False, e=editor: e.clear_date()
             )
             editor_row.addWidget(clear_btn)
-            wrapper.addLayout(editor_row)
+            right = editor_row
+        elif column_name.strip().lower() == "data filename" and not is_read_only:
+            # A Generate button beside it builds the standard data filename.
+            editor_row = QHBoxLayout()
+            editor_row.setContentsMargins(0, 0, 0, 0)
+            editor_row.setSpacing(8)
+            editor_row.addWidget(editor, 1)
+
+            gen_btn = QPushButton("Generate")
+            gen_btn.setToolTip("Build the filename from the IC number, cell and project")
+            gen_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            gen_btn.setAutoDefault(False)
+            gen_btn.clicked.connect(self._generate_filename)
+            editor_row.addWidget(gen_btn)
+            right = editor_row
+
+        # Top-align the label so it sits at the top of taller editors (Comments).
+        row.addWidget(label, 0, Qt.AlignmentFlag.AlignTop)
+        if isinstance(right, QWidget):
+            row.addWidget(right, 1)
         else:
-            wrapper.addWidget(editor)
-        return wrapper
+            row.addLayout(right, 1)
+        return row
+
+    # ---------------------------------------------- Data filename generation
+    def _field_value(self, column_name: str) -> str:
+        """Current text of a field editor, by column display name."""
+        editor = self.input_fields.get(column_name)
+        if editor is None:
+            return ""
+        if isinstance(editor, QComboBox):
+            return editor.currentText().strip()
+        if hasattr(editor, "text"):
+            return editor.text().strip()
+        return ""
+
+    def _generate_filename(self) -> None:
+        """Build the standard data filename, then let the user confirm/edit it."""
+        builder = getattr(self.manager, "build_data_filename", None)
+        if not callable(builder):
+            return
+        cathode = self._field_value("Cathode")
+        anode = self._field_value("Anode")
+        channel = self._field_value("Channel") or self._channel_value
+        project = self._field_value("Project ID")
+        proposed = builder(cathode, anode, channel, project)
+        text, ok = QInputDialog.getText(
+            self, "Generate data filename",
+            "Review / edit the proposed filename before applying:",
+            text=proposed,
+        )
+        if ok and text.strip():
+            editor = self.input_fields.get("Data filename")
+            if editor is not None and hasattr(editor, "setText"):
+                editor.setText(text.strip())
 
     # -------------------------------------------------- Editor factory
     def _build_editor(self, spec: FieldSpec, read_only: bool) -> QWidget:
@@ -779,6 +864,22 @@ class EditRowDialog(QDialog):
                 self.reset_info_message.setText(self._reset_banner_text(new_status))
             self.reset_info_banner.setVisible(should_show_banner)
 
+    def _hide_archived_project_items(self, combo: QComboBox) -> None:
+        """Hide archived projects from the dropdown popup.
+
+        The active list drives the dropdown; an archived project is only added so
+        a channel that already uses it still shows it in the closed combo. Hiding
+        (rather than removing) keeps that current value visible while keeping the
+        archived project out of the selectable list.
+        """
+        getter = getattr(self.manager, "get_projects_manager", None)
+        if not callable(getter):
+            return
+        archived = set(getter().get_archived_projects())
+        view = combo.view()
+        for i in range(combo.count()):
+            view.setRowHidden(i, combo.itemText(i) in archived)
+
     def _open_projects_admin(self, combo: QComboBox) -> None:
         """Open the projects admin window and refresh the dropdown afterwards."""
         getter = getattr(self.manager, "get_projects_manager", None)
@@ -786,9 +887,6 @@ class EditRowDialog(QDialog):
             return
         projects_manager = getter()
 
-        # Remember the project list and current selection before any edits so we
-        # can tell whether the selected project was removed.
-        before = set(projects_manager.get_projects())
         current = combo.currentText()
 
         dialog = ProjectsAdminDialog(
@@ -797,24 +895,19 @@ class EditRowDialog(QDialog):
         )
         dialog.exec()
 
-        # Rebuild the dropdown from the (possibly changed) project list.
-        after = projects_manager.get_projects()
+        # Rebuild the dropdown from the (possibly changed) active project list.
+        after = sorted(projects_manager.get_projects(), key=str.casefold)
         combo.blockSignals(True)
         combo.clear()
         combo.addItem("")  # keep an empty option so "no project" is possible
         combo.addItems(after)
 
-        if current in after:
-            # Still a valid project: keep the selection.
-            target = current
-        elif current and current not in before:
-            # A legacy value that was never a managed project: preserve it so we
-            # don't silently overwrite the cell's existing value.
+        # Preserve the current selection even if it left the active list (it was
+        # archived, or is a legacy value) so we never silently blank the cell's
+        # project; archived projects stay assigned on the channels that use them.
+        if current and combo.findText(current, Qt.MatchFlag.MatchFixedString) < 0:
             combo.addItem(current)
-            target = current
-        else:
-            # The selected project was removed (or selection was empty): clear.
-            target = ""
+        target = current
 
         # Re-apply color swatches for the rebuilt items (colors may have changed).
         self._apply_project_colors(combo)
@@ -822,6 +915,7 @@ class EditRowDialog(QDialog):
         idx = combo.findText(target, Qt.MatchFlag.MatchFixedString)
         combo.setCurrentIndex(max(idx, 0))
         combo.blockSignals(False)
+        self._hide_archived_project_items(combo)
 
     def save_changes(self):
         """Save changes back to the table and emit signal with row data"""
@@ -867,6 +961,51 @@ class EditRowDialog(QDialog):
         # data but left that status — auto-clearing would silently wipe it, so
         # block and ask them to pick a data-keeping status (or clear it themselves).
         new_status = row_data[status_col].strip().lower() if status_col is not None else ""
+
+        # Block In use when the channel's latest calibration failed — it needs a
+        # fresh passing calibration first. (Only on the transition into In use.)
+        if (new_status == "in use" and self.initial_status != "in use"
+                and self._calibration_failed):
+            ConfirmDialog.alert(
+                self,
+                "Calibration failed",
+                "This channel's last calibration <b>failed</b>.",
+                informative="Run a new calibration and get it approved before "
+                "setting this channel In use.",
+                subtitle="",
+            )
+            return
+
+        # Block setting a channel In use when its calibration is over 3 months old
+        # (only on the transition into In use, so an already-running cell can still
+        # be edited/saved).
+        if (new_status == "in use" and self.initial_status != "in use"
+                and self._calibration_stale):
+            ConfirmDialog.alert(
+                self,
+                "Calibration expired",
+                "This channel hasn't been calibrated in over <b>3 months</b>.",
+                informative="Run a new calibration and get it approved before "
+                "setting this channel In use.",
+                subtitle="",
+            )
+            return
+
+        # Block In use while a calibration is still awaiting a decision — it has
+        # to be Approved or Rejected first (an In-use cell locks calibration, so
+        # a pending measurement couldn't be resolved afterwards).
+        if (new_status == "in use" and self.initial_status != "in use"
+                and self._calibration_pending):
+            ConfirmDialog.alert(
+                self,
+                "Calibration pending",
+                "This channel has a calibration still <b>awaiting a decision</b>.",
+                informative="Approve or reject the pending calibration before "
+                "setting this channel In use.",
+                subtitle="",
+            )
+            return
+
         if (status_col is not None
                 and new_status in self.CLEARING_STATUSES
                 and self.initial_status == new_status):

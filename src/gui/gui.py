@@ -6,9 +6,11 @@ from PyQt6.QtCore import Qt
 from src.data.db import DatabaseChangeNotifier, DatabaseError
 from src.data.immersion_cells_manager import ImmersionCellsManager
 from src.data.station_summary_manager import StationSummaryManager
+from src.data.calibration_manager import CalibrationManager
 from src.data.projects_manager import invalidate_projects_cache
 from src.gui.cells_mapping import CellsMapping
 from src.gui.station_summary_gui import StationSummary
+from src.gui.calibration_gui import CalibrationTab
 
 
 class MainWindow(QMainWindow):
@@ -17,6 +19,7 @@ class MainWindow(QMainWindow):
         # Create the managers once at the application level
         self.cells_manager = ImmersionCellsManager()
         self.summary_manager = StationSummaryManager()
+        self.calibration_manager = CalibrationManager()
         self.init_ui()
 
         # Poll the database for external changes (other users) and refresh.
@@ -38,8 +41,11 @@ class MainWindow(QMainWindow):
 
         # Create station_summary_tab first so we can pass its callback to cells_mapping.
         # It gets the cells manager too, to reuse the cell editor for episodes.
+        # on_cells_changed lets it refresh Cells Mapping when it frees a cell
+        # (created below; the lambda is only called on later user interaction).
         self.station_summary_tab = StationSummary(
-            self.summary_manager, self.cells_manager
+            self.summary_manager, self.cells_manager,
+            on_cells_changed=lambda: self.cells_mapping_tab.reload_data(),
         )
 
         # Create cells_mapping_tab with a callback function to log channel usage
@@ -47,8 +53,8 @@ class MainWindow(QMainWindow):
             self.station_summary_tab.log_channel_usage(channel, row_data)
 
         def on_project_removed(project_name: str):
-            self.cells_manager.clear_project(project_name)
-            self.summary_manager.remove_project_from_history(project_name)
+            # Archive/restore keeps the project on existing channels + history;
+            # just refresh so it (dis)appears in the assignment dropdowns.
             self.cells_mapping_tab.reload_data()
             self.station_summary_tab.reload_data()
 
@@ -58,14 +64,43 @@ class MainWindow(QMainWindow):
             self.cells_mapping_tab.reload_data()
             self.station_summary_tab.reload_data()
 
+        # Refresh the calibration tab when a channel is added/deleted, since its
+        # channel list mirrors the cells (avoids re-querying on every tab switch).
+        def on_channels_changed():
+            self.calibration_tab.reload_data()
+
         self.cells_mapping_tab = CellsMapping(
             self.cells_manager,
             on_channel_logged=on_channel_logged,
             on_project_removed=on_project_removed,
             on_project_renamed=on_project_renamed,
+            on_channels_changed=on_channels_changed,
+            calibration_manager=self.calibration_manager,
         )
+
+        # A calibration verdict couples to the cell status: a Reject frees the
+        # cell into "In repair" (comment-only); an Approve returns an In-repair
+        # cell to "Available" (it won't disturb an In-use cell).
+        def on_calibration_decision(channel: str, passed: bool):
+            if passed:
+                cell = self.cells_manager.get_cell_by_channel(channel)
+                if (cell.get("status") or "").strip().lower() == "in repair":
+                    self.cells_manager.set_channel_status_cleared(channel, "Available")
+            else:
+                self.cells_manager.set_channel_status_cleared(
+                    channel, "In repair",
+                    comment="Set to In repair by a failed calibration.",
+                )
+            self.cells_mapping_tab.reload_data()
+            self.station_summary_tab.reload_data()
+
+        self.calibration_tab = CalibrationTab(
+            self.calibration_manager, on_decision=on_calibration_decision
+        )
+
         self.tabs.addTab(self.cells_mapping_tab, "Cells mapping")
         self.tabs.addTab(self.station_summary_tab, "Station Summary")
+        self.tabs.addTab(self.calibration_tab, "Channel Calibration")
 
 
         # Apply tab styling
@@ -83,6 +118,7 @@ class MainWindow(QMainWindow):
         invalidate_projects_cache()
         self.cells_mapping_tab.reload_data()
         self.station_summary_tab.reload_data()
+        self.calibration_tab.reload_data()
 
     def _apply_tab_styling(self) -> None:
         """Apply modern styling to the tab widget."""

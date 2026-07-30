@@ -66,9 +66,12 @@ class EpisodeInfoDialog(QDialog):
         }
     """
 
-    def __init__(self, episode: dict, parent=None):
+    def __init__(self, episode: dict, parent=None, will_free_cell: bool = False):
         super().__init__(parent)
         self.episode = episode or {}
+        # True when deleting this episode will also free its cell (it's the
+        # channel's current experiment) — the delete confirmation says so.
+        self._will_free_cell = will_free_cell
         # Set to True when the user confirms deletion / requests a modify; the
         # caller acts on it after exec() returns.
         self.delete_requested = False
@@ -245,11 +248,11 @@ class EpisodeInfoDialog(QDialog):
 
     def _on_delete(self) -> None:
         """Confirm, then flag the delete and close (the caller does the work)."""
-        confirm = QMessageBox.question(
-            self,
-            "Delete entry",
-            "Are you sure you want to permanently delete this timeline entry?\n\n",
-        )
+        message = "Are you sure you want to permanently delete this timeline entry?"
+        if self._will_free_cell:
+            message += ("\n\nThis is the channel's current experiment, so its "
+                        "cell will be freed and set to Available.")
+        confirm = QMessageBox.question(self, "Delete entry", message)
         if confirm == QMessageBox.StandardButton.Yes:
             self.delete_requested = True
             self.accept()

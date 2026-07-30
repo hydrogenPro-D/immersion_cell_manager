@@ -154,6 +154,7 @@ class ConfirmDialog(QDialog):
         destructive: bool = False,
         icon: str | None = None,
         subtitle: str | None = None,
+        single: bool = False,
     ):
         super().__init__(parent)
         self._title = title
@@ -162,9 +163,10 @@ class ConfirmDialog(QDialog):
         self._confirm_text = confirm_text
         self._cancel_text = cancel_text
         self._destructive = destructive
+        self._single = single  # single-button acknowledgement (no Cancel)
         self._icon = icon if icon is not None else ("⚠️" if destructive else "❓")
         self._subtitle = subtitle if subtitle is not None else (
-            "Please confirm — this cannot be undone." if destructive
+            "Please confirm, this cannot be undone." if destructive
             else "Please confirm to continue."
         )
         self._build_ui()
@@ -260,22 +262,26 @@ class ConfirmDialog(QDialog):
         row.setSpacing(10)
         row.addStretch(1)
 
-        cancel_btn = QPushButton(self._cancel_text)
-        cancel_btn.setObjectName("ConfirmGhost")
-        cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        cancel_btn.clicked.connect(self.reject)
-        cancel_btn.setAutoDefault(False)
-        cancel_btn.setDefault(True)  # safer default = Cancel
+        if not self._single:
+            cancel_btn = QPushButton(self._cancel_text)
+            cancel_btn.setObjectName("ConfirmGhost")
+            cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            cancel_btn.clicked.connect(self.reject)
+            cancel_btn.setAutoDefault(False)
+            cancel_btn.setDefault(True)  # safer default = Cancel
+            row.addWidget(cancel_btn)
 
         confirm_btn = QPushButton(self._confirm_text)
+        # A single-button acknowledgement keeps the friendly teal button even
+        # under a warning (red) header.
         confirm_btn.setObjectName(
-            "ConfirmDanger" if self._destructive else "ConfirmPrimary"
+            "ConfirmDanger" if self._destructive and not self._single
+            else "ConfirmPrimary"
         )
         confirm_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         confirm_btn.clicked.connect(self.accept)
         confirm_btn.setAutoDefault(False)
-
-        row.addWidget(cancel_btn)
+        confirm_btn.setDefault(self._single)
         row.addWidget(confirm_btn)
         return row
 
@@ -321,4 +327,29 @@ class ConfirmDialog(QDialog):
             subtitle=subtitle,
         )
         return dialog.exec() == QDialog.DialogCode.Accepted
+
+    @classmethod
+    def alert(
+        cls,
+        parent,
+        title: str,
+        message: str,
+        informative: str = "",
+        button_text: str = "OK",
+        subtitle: str | None = None,
+        icon: str | None = None,
+        destructive: bool = True,
+    ) -> None:
+        """Show a fancy single-button warning/notice (no Cancel)."""
+        cls(
+            parent=parent,
+            title=title,
+            message=message,
+            informative=informative,
+            confirm_text=button_text,
+            destructive=destructive,
+            icon=icon,
+            subtitle=subtitle,
+            single=True,
+        ).exec()
 

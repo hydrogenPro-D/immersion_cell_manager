@@ -66,17 +66,13 @@ TABLE_STYLE = """
         outline: 0;
     }
     QTableWidget::item {
-        padding: 12px 14px;
+        padding: 2px 14px;
         border: none;
         border-bottom: 1px solid #ECEFF2;
         color: #1F2A33;
     }
     QTableWidget::item:alternate {
         background-color: #F7FAFC;
-    }
-    QTableWidget::item:hover {
-        background-color: #E6F4F4;
-        color: #0B3B3B;
     }
     QTableWidget::item:selected {
         background: qlineargradient(x1:0, y1:0, x2:0, y2:1,

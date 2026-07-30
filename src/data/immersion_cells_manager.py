@@ -5,6 +5,7 @@ Backed by the ``icm.cells`` table: reads via ``SELECT``, writes via the
 not stored.
 """
 
+import re
 from datetime import datetime
 
 from src.data.db import get_db, DatabaseError, to_text, to_param
@@ -28,6 +29,9 @@ class ImmersionCellsManager:
         "Channel": "channel",
         "Status": "status",
         "Project ID": "project_id",
+        # Derived, read-only: come from the cell's project (edit via Manage projects).
+        "Density [g/L]": "density",
+        "Fe [ppm]": "fe_ppm",
         "Current owner": "current_owner",
         "Assembled by": "assembled_by",
         "Start date": "start_date",
@@ -69,6 +73,9 @@ class ImmersionCellsManager:
             field_type=FieldType.TEXT,
             read_only=True,  # Read-only because it's calculated at runtime
         ),
+        # Read-only: come from the project, editable only via Manage projects.
+        "Density [g/L]": FieldSpec(name="Density [g/L]", field_type=FieldType.TEXT, read_only=True),
+        "Fe [ppm]": FieldSpec(name="Fe [ppm]", field_type=FieldType.TEXT, read_only=True),
     }
 
     def __init__(self, db=None):
@@ -113,10 +120,11 @@ class ImmersionCellsManager:
         """Return the :class:`FieldSpec` for ``column_name``."""
         # Project ID is a dropdown populated from the configurable project list.
         if column_name == "Project ID":
+            projects = sorted(self.projects_manager.get_projects(), key=str.casefold)
             return FieldSpec(
                 name="Project ID",
                 field_type=FieldType.CHOICE,
-                choices=[""] + self.projects_manager.get_projects(),
+                choices=[""] + projects,
                 color_resolver=self.project_color_for,
             )
         return self.FIELD_SPECS.get(
@@ -144,10 +152,23 @@ class ImmersionCellsManager:
 
     # ----------------------------------------------------------- Data reads
     def load_all_cells(self) -> list:
-        """Load all immersion cells from the database as string-valued dicts."""
+        """Load all immersion cells as string-valued dicts.
+
+        Each cell also carries its project's ``density``/``fe_ppm`` (derived,
+        read-only display values — edited only via Manage projects).
+        """
         columns = ", ".join(CELL_COLUMNS)
         rows = self._db.fetch_all(f"SELECT {columns} FROM icm.cells ORDER BY id")
-        return [{k: to_text(r.get(k)) for k in CELL_COLUMNS} for r in rows]
+        densities = self.projects_manager.get_project_densities()
+        fe_ppms = self.projects_manager.get_project_fe_ppms()
+        cells = []
+        for r in rows:
+            cell = {k: to_text(r.get(k)) for k in CELL_COLUMNS}
+            project = cell.get("project_id", "")
+            cell["density"] = densities.get(project, "")
+            cell["fe_ppm"] = fe_ppms.get(project, "")
+            cells.append(cell)
+        return cells
 
     def get_table_data(self) -> list:
         """Get immersion cells data formatted for table display (list of rows)."""
@@ -201,6 +222,45 @@ class ImmersionCellsManager:
             print(f"filename_exists check unavailable (allowing save): {e}")
             return False
 
+    # ------------------------------------------------- Filename generation
+    def next_ic_number(self) -> int:
+        """Highest ``IC####`` used in any data_filename + 1 (gaps are fine)."""
+        try:
+            rows = self._db.fetch_all(
+                "SELECT data_filename FROM icm.cells WHERE data_filename LIKE 'IC%' "
+                "UNION "
+                "SELECT data_filename FROM icm.channel_history "
+                "WHERE data_filename LIKE 'IC%'"
+            )
+        except DatabaseError:
+            rows = []
+        max_n = 0
+        for r in rows:
+            m = re.match(r"IC(\d+)", to_text(r.get("data_filename")))
+            if m:
+                max_n = max(max_n, int(m.group(1)))
+        return max_n + 1
+
+    def build_data_filename(self, cathode: str, anode: str, channel: str,
+                            project_id: str) -> str:
+        """Assemble the standard data filename.
+
+        ``IC{n}_Cat{cathode}_Ano{anode}_rho{density}_{fe}ppm_Fe_{channel}`` —
+        density + Fe come from the project; the IC number auto-increments (4+
+        digits). Values are trimmed and inserted verbatim.
+        """
+        density = self.projects_manager.get_density(project_id)
+        fe_ppm = self.projects_manager.get_fe_ppm(project_id)
+        return "_".join([
+            f"IC{self.next_ic_number():04d}",
+            f"Cat{(cathode or '').strip()}",
+            f"Ano{(anode or '').strip()}",
+            f"rho{(density or '').strip()}",
+            f"{(fe_ppm or '').strip()}ppm",
+            "Fe",
+            (channel or "").strip(),
+        ])
+
     def get_cell_by_channel(self, channel: str) -> dict:
         """Get a specific immersion cell by its channel ID (or {} if missing)."""
         columns = ", ".join(CELL_COLUMNS)
@@ -239,6 +299,39 @@ class ImmersionCellsManager:
         if not params.get("channel"):
             raise ValueError("Channel ID cannot be empty")
         self._db.exec_proc("usp_cell_update", params)
+
+    def set_channel_status_cleared(self, channel: str, status: str,
+                                   comment: str = None) -> None:
+        """Set a channel's cell to ``status`` and clear its experiment fields.
+
+        Used by the calibration coupling (fail -> In repair, pass -> Available):
+        only channel/status/comment are sent, so every other field defaults to
+        NULL in usp_cell_update and the cell is freed. The comment is kept to
+        record why (e.g. a failed calibration).
+        """
+        if not (channel or "").strip():
+            raise ValueError("Channel ID cannot be empty")
+        params = {"channel": channel, "status": status}
+        if comment is not None:
+            params["comments"] = comment
+        self._db.exec_proc("usp_cell_update", params)
+
+    def free_channel(self, channel: str) -> None:
+        """Free a channel's cell to Available, clearing the experiment fields but
+        keeping Added water / Separator — the same fields the editor keeps when
+        you free a cell manually. Used when an experiment is deleted."""
+        channel = (channel or "").strip()
+        if not channel:
+            raise ValueError("Channel ID cannot be empty")
+        cell = self.get_cell_by_channel(channel)
+        # Only channel/status + the kept fields are sent; usp_cell_update NULLs
+        # every other column, freeing the cell.
+        self._db.exec_proc("usp_cell_update", {
+            "channel": channel,
+            "status": "Available",
+            "added_water_b": to_param(cell.get("added_water_b", "")),
+            "separator": to_param(cell.get("separator", "")),
+        })
 
     def add_new_row(self, row_data: list) -> None:
         """Insert a new cell (via ``usp_cell_insert``)."""

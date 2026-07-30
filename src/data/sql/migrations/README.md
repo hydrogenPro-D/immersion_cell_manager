@@ -34,11 +34,13 @@ append-only, so `010` is never edited again).
 | 011 | `011_create_history_delete_procedure.sql` | `usp_history_delete` (+ its own `EXECUTE` grant) |
 | 012 | `012_create_history_filename_exists_procedure.sql` | `usp_history_filename_exists` (data_filename uniqueness check; + its own `EXECUTE` grant) |
 | 013 | `013_add_expected_end_date.sql` | adds `expected_end_date` to `cells` + `channel_history`; updates the 4 insert/update procs |
+| 014 | `014_create_calibration_table_and_procs.sql` | `icm.channel_calibration` + `usp_calibration_insert` / `_update` / `_set_decision` / `_delete` (+ their own `EXECUTE` grants) |
+| 015 | `015_add_project_density_fe_ppm.sql` | adds `density` + `fe_ppm` to `projects`; updates `usp_project_insert` / `_update` (for auto data-filename generation) |
 
 ## How to run
 
 1. Connect SSMS / Azure Data Studio to the target database (apply to **`dataloggingTest`** first, `dataloggingDev` after).
-2. Run `001` → `013` in order. Each file is safe to re-run.
+2. Run `001` → `015` in order. Each file is safe to re-run.
 3. For `003`, set a real password in `@pw` first, run, then **close without saving**.
 4. Confirm: `SELECT * FROM icm.schema_migrations ORDER BY id;`
 

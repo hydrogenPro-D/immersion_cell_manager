@@ -86,6 +86,26 @@ DIALOG_STYLE = """
         border: 1px dashed #C7D3DB;
     }
 
+    /* --------- Multi-line (Comments) --------- */
+    QTextEdit#CommentsField {
+        background-color: #F7FAFC;
+        border: 1px solid #D8E2E8;
+        border-radius: 8px;
+        padding: 6px 10px;
+        font-size: 13px;
+        color: #1F2A33;
+        selection-background-color: #BFE6E6;
+        selection-color: #0B3B3B;
+    }
+    QTextEdit#CommentsField:hover {
+        border: 1px solid #BBD0D8;
+        background-color: #FFFFFF;
+    }
+    QTextEdit#CommentsField:focus {
+        border: 1px solid #3FA3A3;
+        background-color: #FFFFFF;
+    }
+
     /* --------- Choice (QComboBox) --------- */
     QComboBox#ChoiceField {
         background-color: #F7FAFC;

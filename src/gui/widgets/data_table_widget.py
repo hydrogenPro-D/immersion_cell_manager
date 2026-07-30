@@ -1,11 +1,49 @@
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QBrush
 import re
 
-from PyQt6.QtWidgets import QTableWidget, QTableView, QAbstractItemView, QHeaderView, QGraphicsDropShadowEffect, QTableWidgetItem
+from PyQt6.QtWidgets import (
+    QTableWidget, QTableView, QAbstractItemView, QHeaderView,
+    QGraphicsDropShadowEffect, QTableWidgetItem, QStyledItemDelegate,
+    QStyle, QStyleOptionViewItem,
+)
 
 from src.gui.styles.table_styles import TABLE_STYLE
-from src.gui.widgets.pill_delegate import PillDelegate
+from src.gui.widgets.pill_delegate import PillDelegate, WARN_ROLE
+
+
+class _RowTintDelegate(QStyledItemDelegate):
+    """Paints an item's own background (a row tint set via ``setBackground``).
+
+    The table stylesheet styles ``::item``, which makes Qt ignore the model's
+    background role — so a plain cell can't be tinted by ``setBackground`` alone.
+    This delegate fills the tint itself (bypassing the stylesheet) and lets the
+    base delegate draw only the text on top; untinted cells fall through to
+    normal stylesheet rendering (alternating / hover / selection preserved).
+    """
+
+    def paint(self, painter, option, index):
+        opt = QStyleOptionViewItem(option)
+        # Never highlight a cell on hover.
+        opt.state &= ~QStyle.StateFlag.State_MouseOver
+        brush = index.data(Qt.ItemDataRole.BackgroundRole)
+        if brush is not None and not (opt.state & QStyle.StateFlag.State_Selected):
+            painter.fillRect(option.rect, brush)
+            # Drop the alternate feature / bg so the base delegate doesn't repaint
+            # a (stylesheet) background over our fill.
+            opt.features &= ~QStyleOptionViewItem.ViewItemFeature.Alternate
+            opt.backgroundBrush = QBrush(Qt.GlobalColor.transparent)
+        super().paint(painter, opt, index)
+
+# Tooltip shown on the red "!" of a channel whose calibration is too old.
+STALE_CALIBRATION_TOOLTIP = (
+    "This channel hasn't been calibrated in over 3 months. Recalibrate it "
+    "before setting it In use."
+)
+
+# Row tint for a channel whose calibration is Awaiting decision (matches the
+# "Awaiting decision" pill background in the Channel Calibration tab).
+PENDING_CALIBRATION_TINT = "#FFEAB3"
 
 
 class DataTableWidget(QTableWidget):
@@ -14,8 +52,15 @@ class DataTableWidget(QTableWidget):
     # Comment text wrapping configuration
     COMMENT_WRAP_LENGTH = 60
 
+    # Comments fills the leftover width but never shrinks below this (px), so it
+    # stays readable even when the other columns fill the viewport.
+    MIN_COMMENTS_WIDTH = 300
+
+    # Extra px added to a wrapped (multi-line) row so the lines aren't cramped.
+    MULTILINE_ROW_EXTRA = 4
+
     # Zoom scales the cell font + row height together.
-    BASE_ROW_HEIGHT = 40
+    BASE_ROW_HEIGHT = 24
     BASE_FONT_PX = 12
     MIN_ZOOM = 0.7
     MAX_ZOOM = 2.0
@@ -27,6 +72,10 @@ class DataTableWidget(QTableWidget):
         self._zoom = 1.0
         self.sorted_column = None
         self.sort_order = None
+        # Channels whose latest calibration is too old (get a red "!" on Status).
+        self._stale_channels = set()
+        # Channels with a calibration awaiting decision (whole row tinted yellow).
+        self._pending_channels = set()
         # Get the projects manager to look up descriptions
         from src.data.immersion_cells_manager import ImmersionCellsManager
         if isinstance(manager, ImmersionCellsManager):
@@ -52,9 +101,9 @@ class DataTableWidget(QTableWidget):
         # Apply styling (font-size is zoom-dependent, so build it dynamically)
         self._apply_table_style()
 
-        # Selection / editing behaviour
-        self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        # Selection / editing behaviour. No selection: clicking a row shouldn't
+        # highlight it (double-click still edits — it uses the clicked index).
+        self.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
@@ -72,6 +121,18 @@ class DataTableWidget(QTableWidget):
         h_header = self.horizontalHeader()
         h_header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         h_header.setMinimumSectionSize(100)  # Minimum width per column
+        # Comments absorbs leftover width (fills the viewport) but is kept at
+        # MIN_COMMENTS_WIDTH or wider by _fit_comments_column so it stays readable
+        # even when the other columns are wide (a scrollbar appears instead).
+        self._comments_col = None
+        try:
+            self._comments_col = self.manager.get_column_names().index("Comments")
+            h_header.setSectionResizeMode(
+                self._comments_col, QHeaderView.ResizeMode.Interactive
+            )
+            h_header.sectionResized.connect(self._on_section_resized)
+        except (ValueError, AttributeError):
+            h_header.setStretchLastSection(True)
         h_header.setHighlightSections(False)
         h_header.setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         h_header.setFixedHeight(44)
@@ -80,7 +141,10 @@ class DataTableWidget(QTableWidget):
 
         # Vertical header polish
         v_header = self.verticalHeader()
-        v_header.setDefaultSectionSize(40)
+        v_header.setDefaultSectionSize(self.BASE_ROW_HEIGHT)
+        # Let single-line rows shrink to their content (the default minimum
+        # floors them taller than needed).
+        v_header.setMinimumSectionSize(16)
         v_header.setVisible(False)
 
         # Subtle elevated shadow
@@ -174,8 +238,7 @@ class DataTableWidget(QTableWidget):
         self.frozen_view.setModel(self.model())
         self.frozen_view.setSelectionModel(self.selectionModel())
         self.frozen_view.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.frozen_view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.frozen_view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.frozen_view.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.frozen_view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.frozen_view.setAlternatingRowColors(True)
         self.frozen_view.setShowGrid(False)
@@ -198,6 +261,9 @@ class DataTableWidget(QTableWidget):
 
         f_v_header = self.frozen_view.verticalHeader()
         f_v_header.setDefaultSectionSize(self.verticalHeader().defaultSectionSize())
+        # Match the main table's minimum so synced row heights don't get floored
+        # taller here (which would misalign the frozen Channel column).
+        f_v_header.setMinimumSectionSize(16)
         f_v_header.setVisible(False)
 
         # Only show the first column
@@ -242,8 +308,48 @@ class DataTableWidget(QTableWidget):
             header_height + viewport_geo.height(),
         )
 
+    def _on_section_resized(self, logical_index, _old, _new):
+        # A content-sized column changed width -> re-fit Comments. Ignore our own
+        # resize of the Comments column to avoid a feedback loop.
+        if logical_index != self._comments_col:
+            self._fit_comments_column()
+
+    def _fit_comments_column(self):
+        """Size Comments to the leftover width, floored at MIN_COMMENTS_WIDTH."""
+        col = getattr(self, "_comments_col", None)
+        if col is None:
+            return
+        others = sum(
+            self.columnWidth(c) for c in range(self.columnCount())
+            if c != col and not self.isColumnHidden(c)
+        )
+        leftover = self.viewport().width() - others
+        target = max(self.MIN_COMMENTS_WIDTH, leftover)
+        if self.columnWidth(col) != target:
+            self.setColumnWidth(col, target)
+            # Row heights were computed at the old (often narrower) width, which
+            # over-wraps long comments into extra lines — re-fit to the new width.
+            self.resizeRowsToContents()
+            self._pad_multiline_rows()
+
+    def _pad_multiline_row(self, row):
+        """Give a wrapped (multi-line) row a few extra px so it isn't cramped."""
+        single = self.fontMetrics().height() + 8  # ~ a single-line row height
+        h = self.rowHeight(row)
+        if h > single:
+            self.setRowHeight(row, h + self.MULTILINE_ROW_EXTRA)
+
+    def _pad_multiline_rows(self):
+        for r in range(self.rowCount()):
+            self._pad_multiline_row(r)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._fit_comments_column()
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._fit_comments_column()
         if hasattr(self, "frozen_view"):
             self._update_frozen_geometry()
 
@@ -273,8 +379,58 @@ class DataTableWidget(QTableWidget):
             )
             self.setItem(row_position, column, item)
 
-        # Let PyQt auto-resize row to fit content
+        self._mark_stale_calibration(row_position, data, column_names)
+        self._tint_pending_calibration(row_position, data, column_names)
+
+        # Let PyQt auto-resize row to fit content, plus a little extra when the
+        # row wraps to multiple lines so the lines aren't cramped.
         self.resizeRowToContents(row_position)
+        self._pad_multiline_row(row_position)
+
+    def set_stale_channels(self, channels) -> None:
+        """Set which channels should show the stale-calibration warning."""
+        self._stale_channels = set(channels or ())
+
+    def set_pending_channels(self, channels) -> None:
+        """Set which channels have a calibration awaiting decision (row tint)."""
+        self._pending_channels = set(channels or ())
+
+    def _tint_pending_calibration(self, row, data, column_names):
+        """Tint the whole row yellow if its channel has a pending calibration."""
+        if not self._pending_channels:
+            return
+        try:
+            channel_col = column_names.index("Channel")
+        except ValueError:
+            return
+        channel = str(data[channel_col]) if channel_col < len(data) else ""
+        if channel not in self._pending_channels:
+            return
+        tint = QColor(PENDING_CALIBRATION_TINT)
+        for c in range(self.columnCount()):
+            item = self.item(row, c)
+            if item is None:  # empty cells still need an item to carry the tint
+                item = QTableWidgetItem("")
+                item.setTextAlignment(
+                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter
+                )
+                self.setItem(row, c, item)
+            item.setBackground(tint)
+
+    def _mark_stale_calibration(self, row, data, column_names):
+        """Flag the Status cell with a red '!' if this row's channel is stale."""
+        if not self._stale_channels:
+            return
+        try:
+            channel_col = column_names.index("Channel")
+            status_col = column_names.index("Status")
+        except ValueError:
+            return
+        channel = str(data[channel_col]) if channel_col < len(data) else ""
+        item = self.item(row, status_col)
+        if item is not None and channel in self._stale_channels:
+            item.setData(WARN_ROLE, True)
+            item.setToolTip(STALE_CALIBRATION_TOOLTIP)
 
     def _wrap_text(self, text: str, max_length: int = None) -> str:
         """Wrap text to fit within max_length per line.
@@ -510,6 +666,12 @@ class DataTableWidget(QTableWidget):
         corresponding column gets a :class:`PillDelegate`. Missing methods or
         specs are silently ignored, so legacy managers keep working.
         """
+        # Default delegate that honors a row tint (bypassing the ::item
+        # stylesheet). Pill columns override it per-column below.
+        self.setItemDelegate(_RowTintDelegate(self))
+        if hasattr(self, "frozen_view"):
+            self.frozen_view.setItemDelegate(_RowTintDelegate(self.frozen_view))
+
         get_spec = getattr(self.manager, "get_field_spec", None)
         if not callable(get_spec):
             return
@@ -519,10 +681,12 @@ class DataTableWidget(QTableWidget):
             resolver = getattr(spec, "color_resolver", None)
             if resolver is None:
                 continue
-            self.setItemDelegateForColumn(col, PillDelegate(resolver, self))
+            self.setItemDelegateForColumn(
+                col, PillDelegate(resolver, self, enable_hover=False)
+            )
             # Mirror the delegate on the frozen overlay for the first column
             if col == 0 and hasattr(self, "frozen_view"):
                 self.frozen_view.setItemDelegateForColumn(
-                    0, PillDelegate(resolver, self.frozen_view)
+                    0, PillDelegate(resolver, self.frozen_view, enable_hover=False)
                 )
 

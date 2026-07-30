@@ -271,7 +271,9 @@ class DatabaseChangeNotifier(QObject):
             (SELECT COUNT(*) FROM icm.channel_history)                            AS c3,
             (SELECT ISNULL(CHECKSUM_AGG(CHECKSUM(*)), 0) FROM icm.channel_history) AS c4,
             (SELECT COUNT(*) FROM icm.projects)                                   AS c5,
-            (SELECT ISNULL(CHECKSUM_AGG(CHECKSUM(*)), 0) FROM icm.projects)       AS c6
+            (SELECT ISNULL(CHECKSUM_AGG(CHECKSUM(*)), 0) FROM icm.projects)       AS c6,
+            (SELECT COUNT(*) FROM icm.channel_calibration)                         AS c7,
+            (SELECT ISNULL(CHECKSUM_AGG(CHECKSUM(*)), 0) FROM icm.channel_calibration) AS c8
     """
 
     def __init__(self, db: Database = None, interval_ms: int = 5000, parent=None):
