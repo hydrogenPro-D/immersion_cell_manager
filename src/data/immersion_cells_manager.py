@@ -155,7 +155,7 @@ class ImmersionCellsManager:
         """Load all immersion cells as string-valued dicts.
 
         Each cell also carries its project's ``density``/``fe_ppm`` (derived,
-        read-only display values — edited only via Manage projects).
+        read-only display values, edited only via Manage projects).
         """
         columns = ", ".join(CELL_COLUMNS)
         rows = self._db.fetch_all(f"SELECT {columns} FROM icm.cells ORDER BY id")
@@ -204,7 +204,7 @@ class ImmersionCellsManager:
     def filename_exists(self, data_filename: str, exclude_id=None) -> bool:
         """Return True if ``data_filename`` is already used by an experiment.
 
-        Calls ``usp_history_filename_exists`` (migration 012) — data_filename is a
+        Calls ``usp_history_filename_exists`` (migration 012), data_filename is a
         unique key. Fails open (returns False) if the check can't run, so a
         missing proc never blocks saving.
         """
@@ -245,7 +245,7 @@ class ImmersionCellsManager:
                             project_id: str) -> str:
         """Assemble the standard data filename.
 
-        ``IC{n}_Cat{cathode}_Ano{anode}_rho{density}_{fe}ppm_Fe_{channel}`` —
+        ``IC{n}_Cat{cathode}_Ano{anode}_rho{density}_{fe}ppm_Fe_{channel}``,
         density + Fe come from the project; the IC number auto-increments (4+
         digits). Values are trimmed and inserted verbatim.
         """
@@ -318,7 +318,7 @@ class ImmersionCellsManager:
 
     def free_channel(self, channel: str) -> None:
         """Free a channel's cell to Available, clearing the experiment fields but
-        keeping Added water / Separator — the same fields the editor keeps when
+        keeping Added water / Separator, the same fields the editor keeps when
         you free a cell manually. Used when an experiment is deleted."""
         channel = (channel or "").strip()
         if not channel:

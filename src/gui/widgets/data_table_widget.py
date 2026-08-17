@@ -1,4 +1,4 @@
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QEvent
 from PyQt6.QtGui import QColor, QBrush
 import re
 
@@ -9,14 +9,21 @@ from PyQt6.QtWidgets import (
 )
 
 from src.gui.styles.table_styles import TABLE_STYLE
-from src.gui.widgets.pill_delegate import PillDelegate, WARN_ROLE
+from src.gui.widgets.pill_delegate import PillDelegate, WARN_ROLE, paint_row_border
+
+
+def _hover_row_of(view) -> int:
+    """The hovered row as tracked by the owning DataTableWidget (the frozen
+    overlay defers to its main table)."""
+    main = getattr(view, "_main_table", view)
+    return getattr(main, "_hover_row", -1)
 
 
 class _RowTintDelegate(QStyledItemDelegate):
     """Paints an item's own background (a row tint set via ``setBackground``).
 
     The table stylesheet styles ``::item``, which makes Qt ignore the model's
-    background role — so a plain cell can't be tinted by ``setBackground`` alone.
+    background role, so a plain cell can't be tinted by ``setBackground`` alone.
     This delegate fills the tint itself (bypassing the stylesheet) and lets the
     base delegate draw only the text on top; untinted cells fall through to
     normal stylesheet rendering (alternating / hover / selection preserved).
@@ -24,16 +31,29 @@ class _RowTintDelegate(QStyledItemDelegate):
 
     def paint(self, painter, option, index):
         opt = QStyleOptionViewItem(option)
-        # Never highlight a cell on hover.
-        opt.state &= ~QStyle.StateFlag.State_MouseOver
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        hovered = _hover_row_of(self.parent()) == index.row()
+        # Highlight whole rows with a border only (below), never a cell fill, so
+        # the row tint / pill colors stay visible.
+        opt.state &= ~(QStyle.StateFlag.State_MouseOver
+                       | QStyle.StateFlag.State_Selected)
         brush = index.data(Qt.ItemDataRole.BackgroundRole)
-        if brush is not None and not (opt.state & QStyle.StateFlag.State_Selected):
+        if brush is not None:
             painter.fillRect(option.rect, brush)
             # Drop the alternate feature / bg so the base delegate doesn't repaint
             # a (stylesheet) background over our fill.
             opt.features &= ~QStyleOptionViewItem.ViewItemFeature.Alternate
             opt.backgroundBrush = QBrush(Qt.GlobalColor.transparent)
+        else:
+            # The view paints the ::item:selected gradient across the whole
+            # selected row underneath us, and the QSS ::item background is
+            # transparent, so cover it with the plain zebra bg (selection shows
+            # only as the row outline).
+            alt = bool(option.features
+                       & QStyleOptionViewItem.ViewItemFeature.Alternate)
+            painter.fillRect(option.rect, QColor("#F7FAFC" if alt else "#FFFFFF"))
         super().paint(painter, opt, index)
+        paint_row_border(painter, option, index, hovered=hovered, selected=selected)
 
 # Tooltip shown on the red "!" of a channel whose calibration is too old.
 STALE_CALIBRATION_TOOLTIP = (
@@ -72,6 +92,10 @@ class DataTableWidget(QTableWidget):
         self._zoom = 1.0
         self.sorted_column = None
         self.sort_order = None
+        # Whole-row highlight: hovered row (thin border) + selected row (thick
+        # border); re-clicking the selected row deselects it (toggle).
+        self._hover_row = -1
+        self._toggle_row = -1
         # Channels whose latest calibration is too old (get a red "!" on Status).
         self._stale_channels = set()
         # Channels with a calibration awaiting decision (whole row tinted yellow).
@@ -101,11 +125,16 @@ class DataTableWidget(QTableWidget):
         # Apply styling (font-size is zoom-dependent, so build it dynamically)
         self._apply_table_style()
 
-        # Selection / editing behaviour. No selection: clicking a row shouldn't
-        # highlight it (double-click still edits — it uses the clicked index).
-        self.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        # Selection / editing behaviour. Single whole-row selection (drives the
+        # Remove button + the row outline); re-click toggles it off. Keyboard
+        # focus stays off so there's no focus rectangle.
+        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        # No per-cell hover fill, the native style paints it from the view's
+        # own hover index, so turn WA_Hover off (we draw a whole-row border).
+        self.viewport().setAttribute(Qt.WidgetAttribute.WA_Hover, False)
 
         # Enable scrollbars
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -239,6 +268,13 @@ class DataTableWidget(QTableWidget):
         self.frozen_view.setSelectionModel(self.selectionModel())
         self.frozen_view.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.frozen_view.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        # The overlay defers hover state to the main table so the whole-row
+        # border stays in sync across both.
+        self.frozen_view._main_table = self
+        self.frozen_view.viewport().setAttribute(Qt.WidgetAttribute.WA_Hover, False)
+        self.frozen_view.setMouseTracking(True)
+        self.frozen_view.viewport().setMouseTracking(True)
+        self.frozen_view.viewport().installEventFilter(self)
         self.frozen_view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.frozen_view.setAlternatingRowColors(True)
         self.frozen_view.setShowGrid(False)
@@ -328,7 +364,7 @@ class DataTableWidget(QTableWidget):
         if self.columnWidth(col) != target:
             self.setColumnWidth(col, target)
             # Row heights were computed at the old (often narrower) width, which
-            # over-wraps long comments into extra lines — re-fit to the new width.
+            # over-wraps long comments into extra lines, re-fit to the new width.
             self.resizeRowsToContents()
             self._pad_multiline_rows()
 
@@ -465,8 +501,23 @@ class DataTableWidget(QTableWidget):
 
         return "\n".join(lines)
 
+    # ------------------------------------------------------------------
+    # Whole-row hover + selection toggle
+    # ------------------------------------------------------------------
+    def _set_hover_row(self, row: int) -> None:
+        if row != self._hover_row:
+            self._hover_row = row
+            self.viewport().update()
+            if hasattr(self, "frozen_view"):
+                self.frozen_view.viewport().update()
+
+    def _selected_row(self) -> int:
+        rows = self.selectionModel().selectedRows()
+        return rows[0].row() if rows else -1
+
     def mouseMoveEvent(self, event):
-        """Show tooltip for Project ID column items on hover."""
+        """Track the hovered row (whole-row border) + Project ID tooltip."""
+        self._set_hover_row(self.indexAt(event.pos()).row())
         item = self.itemAt(event.pos())
         if item and self.projects_manager:
             column_names = self.manager.get_column_names()
@@ -481,6 +532,58 @@ class DataTableWidget(QTableWidget):
                         return
 
         super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event):
+        self._set_hover_row(-1)
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        # Remember a press on the already-selected row so release can toggle it
+        # off (clearing on press wouldn't stick, the base re-selects on release).
+        self._toggle_row = -1
+        if event.button() == Qt.MouseButton.LeftButton:
+            r = self.indexAt(event.pos()).row()
+            if r != -1 and r == self._selected_row():
+                self._toggle_row = r
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        if (self._toggle_row != -1 and event.button() == Qt.MouseButton.LeftButton
+                and self.indexAt(event.pos()).row() == self._toggle_row):
+            self.clearSelection()
+            self.viewport().update()
+            if hasattr(self, "frozen_view"):
+                self.frozen_view.viewport().update()
+        self._toggle_row = -1
+
+    def eventFilter(self, obj, event):
+        """Mirror hover + click-to-(de)select from the frozen overlay, which has
+        its own viewport (so its events never reach the main table)."""
+        if hasattr(self, "frozen_view") and obj is self.frozen_view.viewport():
+            et = event.type()
+            if et == QEvent.Type.MouseMove:
+                self._set_hover_row(self.frozen_view.indexAt(event.pos()).row())
+            elif et == QEvent.Type.Leave:
+                self._set_hover_row(-1)
+            elif et == QEvent.Type.MouseButtonPress \
+                    and event.button() == Qt.MouseButton.LeftButton:
+                r = self.frozen_view.indexAt(event.pos()).row()
+                self._toggle_row = -1
+                if r != -1:
+                    if r == self._selected_row():
+                        self._toggle_row = r
+                    else:
+                        self.selectRow(r)
+            elif et == QEvent.Type.MouseButtonRelease \
+                    and event.button() == Qt.MouseButton.LeftButton:
+                if self._toggle_row != -1 \
+                        and self.frozen_view.indexAt(event.pos()).row() == self._toggle_row:
+                    self.clearSelection()
+                    self.viewport().update()
+                    self.frozen_view.viewport().update()
+                self._toggle_row = -1
+        return super().eventFilter(obj, event)
 
     def _on_header_clicked(self, column: int):
         """Handle header click for sorting with cycle: asc -> desc -> no sort"""
@@ -682,11 +785,13 @@ class DataTableWidget(QTableWidget):
             if resolver is None:
                 continue
             self.setItemDelegateForColumn(
-                col, PillDelegate(resolver, self, enable_hover=False)
+                col, PillDelegate(resolver, self, enable_hover=False,
+                                  row_border_mode=True)
             )
             # Mirror the delegate on the frozen overlay for the first column
             if col == 0 and hasattr(self, "frozen_view"):
                 self.frozen_view.setItemDelegateForColumn(
-                    0, PillDelegate(resolver, self.frozen_view, enable_hover=False)
+                    0, PillDelegate(resolver, self.frozen_view, enable_hover=False,
+                                    row_border_mode=True)
                 )
 

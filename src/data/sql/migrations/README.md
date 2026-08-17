@@ -6,14 +6,14 @@ Conventions are defined in [`../integration/MIGRATION_PLAYBOOK.md`](../integrati
 - **Platform:** Azure SQL Database
 - **Schema:** `icm` (owns all tables + the `schema_migrations` ledger)
 - **Allowed databases (wrong-DB guard):** `dataloggingDev`, `dataloggingTest`
-- **Role:** `ic_manager_role` — `SELECT` on `SCHEMA::[icm]` (reads) + `EXECUTE` on each write proc (writes)
+- **Role:** `ic_manager_role`, `SELECT` on `SCHEMA::[icm]` (reads) + `EXECUTE` on each write proc (writes)
 - **App user:** `db_ic_manager_user` (contained user, member of the role)
 
-The app **reads** tables directly and **writes only through stored procedures** —
+The app **reads** tables directly and **writes only through stored procedures**,
 it has no direct INSERT/UPDATE/DELETE. Ownership chaining means `EXECUTE` on the
 procs is sufficient; the role needs no table-level DML. EXECUTE is granted
 **per procedure** (not schema-wide), so a new write proc isn't runnable until its
-`GRANT` is added. Procs `007`–`009` are granted together in `010`; procs added
+`GRANT` is added. Procs `007`-`009` are granted together in `010`; procs added
 **after** `010` grant themselves in their own migration (the files are
 append-only, so `010` is never edited again).
 
@@ -30,7 +30,7 @@ append-only, so `010` is never edited again).
 | 007 | `007_create_cell_procedures.sql` | `usp_cell_insert` / `_update` / `_delete` |
 | 008 | `008_create_project_procedures.sql` | `usp_project_insert` / `_update` / `_rename` / `_delete` |
 | 009 | `009_create_history_procedures.sql` | `usp_history_insert` / `_update` |
-| 010 | `010_grant_execute_to_role.sql` | `EXECUTE` on each write proc (007–009) to the role |
+| 010 | `010_grant_execute_to_role.sql` | `EXECUTE` on each write proc (007-009) to the role |
 | 011 | `011_create_history_delete_procedure.sql` | `usp_history_delete` (+ its own `EXECUTE` grant) |
 | 012 | `012_create_history_filename_exists_procedure.sql` | `usp_history_filename_exists` (data_filename uniqueness check; + its own `EXECUTE` grant) |
 | 013 | `013_add_expected_end_date.sql` | adds `expected_end_date` to `cells` + `channel_history`; updates the 4 insert/update procs |
@@ -57,7 +57,7 @@ python -m src.data.sql.load_initial_data --dry-run  # preview, no changes
 It **prompts** for the connection: pick the database (`dataloggingTest` /
 `dataloggingDev`), then type the server, username, and password (hidden). It
 guards on the chosen database name and only inserts channels that aren't already
-present (safe to re-run). Use a privileged login — `ic_manager_role` may not have
+present (safe to re-run). Use a privileged login, `ic_manager_role` may not have
 INSERT rights.
 
 ## Resetting (test only)
@@ -65,12 +65,12 @@ INSERT rights.
 `../reset_dev.sql` drops the three domain tables so the migrations can recreate
 them after a schema change. It is **destructive** and guarded to run **only on
 `dataloggingTest`** (it throws on `dataloggingDev` / anything else). After
-running it, re-run `004`–`006`.
+running it, re-run `004`-`006`.
 
 ## Notes
 
-- Every table uses a surrogate `id INT IDENTITY` primary key. The business keys —
-  `projects.project_id` (name) and `cells.channel` — are `UNIQUE NOT NULL` columns;
+- Every table uses a surrogate `id INT IDENTITY` primary key. The business keys,
+  `projects.project_id` (name) and `cells.channel`, are `UNIQUE NOT NULL` columns;
   the FKs reference those unique business keys (so project rename still cascades).
 - `db_ic_manager_user`'s password is typed at run time in `003` and never saved to source
   control; store it in the app config later (used by pyodbc).

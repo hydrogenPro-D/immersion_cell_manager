@@ -1,4 +1,4 @@
-# Immersion Cell Manager — working notes for Claude
+# Immersion Cell Manager, working notes for Claude
 
 ## Code style
 

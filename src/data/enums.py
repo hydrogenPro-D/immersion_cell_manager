@@ -22,7 +22,7 @@ class CellStatus(str, Enum):
 
     Each value also has an associated colour pair (background + text) intended
     to be rendered as a small rounded "pill" badge wherever the status is
-    shown — see :meth:`color_for`.
+    shown, see :meth:`color_for`.
     """
 
     AVAILABLE = "Available"

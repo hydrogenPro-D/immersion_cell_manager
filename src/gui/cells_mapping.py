@@ -375,7 +375,7 @@ class CellsMapping(QWidget):
                 channel = row_dict.get("Channel", "")
                 if channel:
                     self.on_channel_logged(channel, row_dict)
-            # A new channel appeared — let mirror tabs refresh.
+            # A new channel appeared, let mirror tabs refresh.
             if self.on_channels_changed:
                 self.on_channels_changed()
         except Exception as e:
@@ -435,7 +435,7 @@ class CellsMapping(QWidget):
             return
 
         self._refresh_status()
-        # A channel was removed — let mirror tabs refresh.
+        # A channel was removed, let mirror tabs refresh.
         if self.on_channels_changed:
             self.on_channels_changed()
 

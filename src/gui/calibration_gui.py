@@ -19,6 +19,7 @@ from src.data.calibration_manager import (
 from src.gui.styles.tab_styles import TAB_STYLE
 from src.gui.widgets.calibration_detail_dialog import (
     CalibrationDetailDialog, STATUS_COLORS, apply_row_border_selection,
+    install_row_toggle_deselect,
 )
 from src.gui.widgets.calibration_plot import CalibrationCurvesPlot
 
@@ -102,9 +103,14 @@ class _CalibrationBarDelegate(QStyledItemDelegate):
             painter.setClipping(False)
         painter.restore()
 
-        if selected:  # keep the row outline continuous across this column
+        # Keep the row outline continuous across this (middle) column: top/bottom
+        # only, matching the selected (thick) / hovered (thin) teal border.
+        hovered = getattr(self.parent(), "_hover_row", -1) == index.row()
+        if selected or hovered:
+            color, width = (QColor("#1F6B6B"), 2) if selected else (QColor("#3FA3A3"), 1)
             painter.save()
-            painter.setPen(QPen(QColor("#333333"), 1))
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+            painter.setPen(QPen(color, width))
             painter.drawLine(rect.left(), rect.top(), rect.right(), rect.top())
             painter.drawLine(rect.left(), rect.bottom(), rect.right(), rect.bottom())
             painter.restore()
@@ -116,7 +122,7 @@ class CalibrationTab(QWidget):
     def __init__(self, manager, on_decision=None, parent=None):
         super().__init__(parent)
         self.manager = manager
-        # on_decision(channel, passed) — couples a verdict to the cell status.
+        # on_decision(channel, passed), couples a verdict to the cell status.
         self.on_decision = on_decision
         self.init_ui()
         self.reload_data()
@@ -141,8 +147,10 @@ class CalibrationTab(QWidget):
         self.table.setShowGrid(False)
         self.table.setWordWrap(True)  # multiline notes wrap + grow the row
         self.table.verticalHeader().setVisible(False)
-        # Selected row = thin black outline (keeps the Status pill colors).
+        # Selected row = thin black outline (keeps the Status pill colors);
+        # re-click the selected row to deselect it.
         apply_row_border_selection(self.table)
+        install_row_toggle_deselect(self.table)
         self.table.doubleClicked.connect(self._on_row_activated)
         # Style the header/frame only (not ::item) so the status-pill cell
         # background colors set per row still show through.
@@ -225,7 +233,7 @@ class CalibrationTab(QWidget):
                 self.table.setItem(r, col, QTableWidgetItem(value))
                 col += 1
             # Calibration-age progress bar: fill = days/90, colored fresh->overdue.
-            # A failed calibration disables the bar (its age is moot — it needs
+            # A failed calibration disables the bar (its age is moot, it needs
             # re-testing), shown as an empty track.
             age = CalibrationManager.age_days(rec["measured_date"])
             box = QTableWidgetItem("")
@@ -249,7 +257,7 @@ class CalibrationTab(QWidget):
             self.table.setItem(r, col, QTableWidgetItem(rec["ic_number"]))
             col += 1
             for d in rec["deltas"]:
-                text = "—" if d is None else f"{d:.2f}"
+                text = "-" if d is None else f"{d:.2f}"
                 item = QTableWidgetItem(text)
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.table.setItem(r, col, item)

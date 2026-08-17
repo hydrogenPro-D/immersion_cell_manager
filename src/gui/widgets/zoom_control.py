@@ -1,4 +1,4 @@
-"""A small, reusable zoom control (− / percentage / +).
+"""A small, reusable zoom control (- / percentage / +).
 
 Shared by the Cells Mapping and Station Summary toolbars so there is a single
 zoom widget. It is agnostic about what it zooms: ``on_zoom(direction)`` performs
@@ -34,9 +34,9 @@ class ZoomControl(QWidget):
         # Wide enough for a 3-digit percentage (e.g. "200%") without cropping.
         self._label.setFixedWidth(60)
 
-        row.addWidget(self._make_button("－", "Zoom out (smaller rows & text)", -1))
+        row.addWidget(self._make_button("-", "Zoom out (smaller rows & text)", -1))
         row.addWidget(self._label)
-        row.addWidget(self._make_button("＋", "Zoom in (larger rows & text)", 1))
+        row.addWidget(self._make_button("+", "Zoom in (larger rows & text)", 1))
 
     def _make_button(self, text: str, tooltip: str, direction: int) -> QPushButton:
         btn = QPushButton(text)

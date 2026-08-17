@@ -2,10 +2,10 @@
 
 Implemented as **two synchronized tables** side by side:
 
-* ``channel_table`` – a single-column table holding the channel names. Its
+* ``channel_table``: a single-column table holding the channel names. Its
   built-in horizontal header ("Channel") stays frozen at the top and the column
   itself is frozen on the left (it is simply a separate widget).
-* ``timeline_table`` – the day/episode grid. Its built-in horizontal header
+* ``timeline_table``: the day/episode grid. Its built-in horizontal header
   (week + day labels) is frozen at the top by Qt automatically.
 
 The two tables share the same rows and row height; their vertical scrollbars
@@ -37,7 +37,7 @@ TODAY_ACCENT = "#3FA3A3"
 TODAY_ACCENT_DARK = "#2C8585"
 
 # Whole-row tint by the channel's current cell status. Colorblind-safe pairing
-# (Okabe–Ito): a bluish green vs. an orange-red (vermillion), which differ on the
+# (Okabe-Ito): a bluish green vs. an orange-red (vermillion), which differ on the
 # blue-yellow axis and in lightness, so red-green colorblind users can tell them
 # apart. RGBA so the wash sits behind the episode bars.
 STATUS_ROW_TINTS = {
@@ -280,7 +280,7 @@ class GanttChartWidget(QWidget):
         self._syncing = False
         self._selecting = False
         # Every bar entry {"row","start_col","span","label","bg","fg"} in creation
-        # order — the authoritative list for destroying/repositioning ALL bars
+        # order, the authoritative list for destroying/repositioning ALL bars
         # (multiple episodes can share a (row, start_col), so a dict alone would
         # drop the colliding ones and leak them as ghosts).
         self._bar_widgets = []
@@ -374,7 +374,7 @@ class GanttChartWidget(QWidget):
         )
         # Vertical scrolling moves the viewport's children (including the today
         # overlay) along with the content, so snap the overlay back to span the
-        # full viewport — otherwise the "today" band drifts off the top and the
+        # full viewport, otherwise the "today" band drifts off the top and the
         # highlight stops partway down.
         self.timeline_table.verticalScrollBar().valueChanged.connect(
             self._on_vertical_scroll
@@ -653,7 +653,7 @@ class GanttChartWidget(QWidget):
             # Keep the current left edge (it may be lazily extended into the past).
             self._render()
             # Restore scroll + bar positions synchronously, so no event-loop tick
-            # paints the reset (scroll=0) state — avoids a one-frame flash.
+            # paints the reset (scroll=0) state, avoids a one-frame flash.
             # executeDelayedItemsLayout forces the rebuilt table's scrollbar range
             # to be final first, so setValue isn't clamped against a stale maximum.
             self._rendering = True  # suppress lazy past-load during the restore
@@ -666,8 +666,8 @@ class GanttChartWidget(QWidget):
                 # The rebuild leaves the header offsets stuck at 0 while the
                 # scrollbars hold the restored values, so the grid/date-axis would
                 # paint at the wrong scroll (bars right, dates wrong). Push the
-                # scroll values into the header offsets — what a resize does
-                # internally — so grid, overlays and bars share one scroll.
+                # scroll values into the header offsets, what a resize does
+                # internally, so grid, overlays and bars share one scroll.
                 self.timeline_table.horizontalHeader().setOffset(hbar.value())
                 self.timeline_table.verticalHeader().setOffset(vbar.value())
                 self.channel_table.verticalHeader().setOffset(
@@ -750,7 +750,7 @@ class GanttChartWidget(QWidget):
         bar.setValue(target_x)
         # After a rebuild Qt defers the header-offset update (scrollContentsBy), so
         # setValue moves our bars (via _on_horizontal_scroll) while the date grid
-        # stays at the old offset — they disagree by the scroll amount. Force the
+        # stays at the old offset, they disagree by the scroll amount. Force the
         # offset to match now and repaint, mirroring the preserve-view restore.
         self.timeline_table.horizontalHeader().setOffset(bar.value())
         self._reposition_bars()
@@ -979,7 +979,7 @@ class GanttChartWidget(QWidget):
         else:
             bg, fg = CellStatus.color_for(episode["status"])
 
-        label = QLabel(episode["label"] or "—")
+        label = QLabel(episode["label"] or "-")
         label.setWordWrap(False)
         # Quick tooltips for the bars too.
         label.setStyle(self._fast_tooltip_style)
@@ -1017,7 +1017,7 @@ class GanttChartWidget(QWidget):
         # Parent the bar to the viewport and manage its geometry ourselves (see
         # _reposition_bars) instead of setCellWidget: Qt owns the geometry of
         # index widgets and re-places them from columnViewportPosition, which
-        # lags the scrollbar after a rebuild — so it kept shoving bars into the
+        # lags the scrollbar after a rebuild, so it kept shoving bars into the
         # future until a resize. As our own child, nothing overrides us.
         label.setParent(table.viewport())
         label.show()

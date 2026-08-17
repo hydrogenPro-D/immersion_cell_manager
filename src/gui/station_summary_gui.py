@@ -168,7 +168,7 @@ class StationSummary(QWidget):
     def _on_search_changed(self, _text: str) -> None:
         """Re-render the chart when the project-ID filter changes.
 
-        Preserve the current scroll position — filtering shouldn't jump the view.
+        Preserve the current scroll position, filtering shouldn't jump the view.
         """
         self._render_filtered(preserve_view=True)
 
@@ -314,7 +314,7 @@ class StationSummary(QWidget):
         values = {}
         for i, display in enumerate(cols):
             key = mapping.get(display)
-            # density/fe_ppm are derived, read-only project columns — not history
+            # density/fe_ppm are derived, read-only project columns, not history
             # fields (usp_history_update has no such params).
             if not key or key in ("duration", "density", "fe_ppm"):
                 continue
@@ -440,10 +440,10 @@ class StationSummary(QWidget):
 
         Returns ``(min_date, max_date, floor_date)`` where:
 
-        * ``min_date`` – left edge initially loaded (today − ``INITIAL_PAST_DAYS``).
-        * ``max_date`` – right edge (today + ``FUTURE_DAYS``, never clipping data
+        * ``min_date``: left edge initially loaded (today - ``INITIAL_PAST_DAYS``).
+        * ``max_date``: right edge (today + ``FUTURE_DAYS``, never clipping data
           that extends further into the future).
-        * ``floor_date`` – the oldest date the chart may lazily scroll back to.
+        * ``floor_date``: the oldest date the chart may lazily scroll back to.
           This is the earliest episode (so "all history and nothing more"); if
           the data is younger than the initial window there is nothing older to
           load, so the floor is just the initial left edge.

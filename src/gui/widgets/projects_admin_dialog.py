@@ -1,6 +1,6 @@
 """Dialog to administer the configurable list of projects.
 
-Master–detail layout: the projects list is on the left; clicking a project shows
+Master-detail layout: the projects list is on the left; clicking a project shows
 its details (name, color, description, density, Fe) on the right, editable in
 place. Changes are saved with the detail panel's **Save** button. "Add project"
 puts the panel into a blank state where Save creates a new project. Persistence
@@ -162,7 +162,7 @@ class ProjectsAdminDialog(QDialog):
 
         self.list_widget = QListWidget()
         self.list_widget.setObjectName("ProjectsList")
-        # Drag to reorder within the session; not persisted (restart = A–Z).
+        # Drag to reorder within the session; not persisted (restart = A-Z).
         self.list_widget.setDragDropMode(QListWidget.DragDropMode.InternalMove)
         self.list_widget.currentItemChanged.connect(self._on_selection)
         layout.addWidget(self.list_widget, 1)
