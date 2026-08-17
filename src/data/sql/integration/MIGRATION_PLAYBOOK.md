@@ -1,4 +1,4 @@
-# SQL Migration System — Implementation Playbook
+# SQL Migration System, Implementation Playbook
 
 A lightweight, **manual** database-migration convention for **Azure SQL Database**
 (also works on SQL Server / Managed Instance). No framework, no runner required:
@@ -14,10 +14,10 @@ to a project. Replace the placeholders in **angle brackets**.
 
 1. **Identical structure across environments** (e.g. `<prod-db>` and `<test-db>`)
    by running the same files against each.
-2. **Idempotent** — every file is safe to re-run; nothing is dropped, nothing
+2. **Idempotent**, every file is safe to re-run; nothing is dropped, nothing
    duplicated.
-3. **Wrong-DB protection** — a file aborts if run against an unexpected database.
-4. **Audit trail** — each file records itself, so you always know what ran where.
+3. **Wrong-DB protection**, a file aborts if run against an unexpected database.
+4. **Audit trail**, each file records itself, so you always know what ran where.
 5. **No secrets in source control.**
 
 ---
@@ -33,13 +33,13 @@ to a project. Replace the placeholders in **angle brackets**.
   004_create_<area>_tables.sql
   005_...
   ```
-- **Append-only.** Never edit a file that has already been applied anywhere — add
+- **Append-only.** Never edit a file that has already been applied anywhere, add
   a new numbered file instead. (Editing applied history is how you get drift.)
 - Pick a schema to own everything, e.g. `<schema>` (and the ledger lives in it).
 
 ---
 
-## Rule 1 — every file is a SINGLE batch (no `GO` in the middle)
+## Rule 1, every file is a SINGLE batch (no `GO` in the middle)
 
 **Why this matters:** SSMS sends each `GO`-separated batch to the server
 *independently* and, by default, **continues to the next batch even if one
@@ -55,14 +55,14 @@ Put a single `GO` only at the very end of the file.
 
 ---
 
-## Rule 2 — guard the database at the top of every file
+## Rule 2, guard the database at the top of every file
 
 ```sql
 IF DB_NAME() NOT IN (N'<prod-db>', N'<test-db>')
     THROW 50000, N'Refusing to run: not an expected database.', 1;
 ```
 
-Azure SQL Database has **no `USE`** — you can't switch databases in a script. You
+Azure SQL Database has **no `USE`**, you can't switch databases in a script. You
 connect to the target DB, and this guard is what stops a wrong-DB run.
 
 Non-bootstrap files should also fail fast if the ledger is missing:
@@ -74,7 +74,7 @@ IF OBJECT_ID(N'[<schema>].[schema_migrations]', N'U') IS NULL
 
 ---
 
-## Rule 3 — the migration ledger (created by file 001)
+## Rule 3, the migration ledger (created by file 001)
 
 The first migration creates the schema and the ledger table the others record into.
 Keeping everything in one batch (note the `EXEC` for `CREATE SCHEMA`):
@@ -107,7 +107,7 @@ Check progress anytime: `SELECT * FROM <schema>.schema_migrations ORDER BY id;`
 
 ---
 
-## Rule 4 — every file self-records (last thing it does)
+## Rule 4, every file self-records (last thing it does)
 
 ```sql
 IF NOT EXISTS (SELECT 1 FROM [<schema>].[schema_migrations]
@@ -121,7 +121,7 @@ The `filename` string must match the actual file name exactly.
 
 ---
 
-## Rule 5 — idempotency cheat-sheet (only create if absent)
+## Rule 5, idempotency cheat-sheet (only create if absent)
 
 ```sql
 -- schema (via EXEC so it doesn't need its own batch)
@@ -164,7 +164,7 @@ GRANT SELECT ON SCHEMA::[<schema>] TO [<role>];
 
 ---
 
-## Rule 6 — secrets are typed at run time, never saved
+## Rule 6, secrets are typed at run time, never saved
 
 For statements needing a password (e.g. `CREATE USER ... WITH PASSWORD`):
 
@@ -187,7 +187,7 @@ Workflow: type the password into `@pw`, run the file, **close it without saving*
 The committed file keeps only the placeholder, and the guard throws if you forget.
 
 Two gotchas this encodes:
-- `EXEC(...)` accepts only concatenated **string literals + variables** — NOT
+- `EXEC(...)` accepts only concatenated **string literals + variables**, NOT
   function calls. Do the `REPLACE` escaping in a variable assignment, then `EXEC`
   the variable.
 - `REPLACE(@pw, '''', '''''')` doubles single quotes so the password can't break
@@ -207,21 +207,21 @@ Two gotchas this encodes:
 
 ## Azure SQL Database caveats (EngineEdition = 5)
 
-- **No `USE`** — connect per database; rely on the `DB_NAME()` guard.
+- **No `USE`**, connect per database; rely on the `DB_NAME()` guard.
 - **Contained users** (`CREATE USER ... WITH PASSWORD`) instead of server logins,
   if you want each DB self-contained.
 - **`CREATE DATABASE`** is a separate one-off against `master` (or via the portal),
   not part of these per-database migrations.
-- **`BULK INSERT` cannot read local files** — load data from Azure Blob, or load
+- **`BULK INSERT` cannot read local files**, load data from Azure Blob, or load
   client-side through a driver (e.g. Python + pyodbc) instead.
 
 ---
 
 ## What you are NOT getting (and why that's fine here)
 
-- No automatic ordering/skip engine — you run files yourself; numbering + the
+- No automatic ordering/skip engine, you run files yourself; numbering + the
   ledger make state obvious.
-- No hash/drift detection — that needs automation. The append-only rule plus
+- No hash/drift detection, that needs automation. The append-only rule plus
   "never edit applied files" covers it manually.
 
 If a project outgrows this (many migrations, frequent applies, CI, a team),

@@ -7,10 +7,12 @@ from src.data.db import DatabaseChangeNotifier, DatabaseError
 from src.data.immersion_cells_manager import ImmersionCellsManager
 from src.data.station_summary_manager import StationSummaryManager
 from src.data.calibration_manager import CalibrationManager
+from src.data.logbook_manager import LogbookManager
 from src.data.projects_manager import invalidate_projects_cache
 from src.gui.cells_mapping import CellsMapping
 from src.gui.station_summary_gui import StationSummary
 from src.gui.calibration_gui import CalibrationTab
+from src.gui.logbook_gui import LogbookTab
 
 
 class MainWindow(QMainWindow):
@@ -20,6 +22,7 @@ class MainWindow(QMainWindow):
         self.cells_manager = ImmersionCellsManager()
         self.summary_manager = StationSummaryManager()
         self.calibration_manager = CalibrationManager()
+        self.logbook_manager = LogbookManager()
         self.init_ui()
 
         # Poll the database for external changes (other users) and refresh.
@@ -98,9 +101,12 @@ class MainWindow(QMainWindow):
             self.calibration_manager, on_decision=on_calibration_decision
         )
 
+        self.logbook_tab = LogbookTab(self.logbook_manager)
+
         self.tabs.addTab(self.cells_mapping_tab, "Cells mapping")
         self.tabs.addTab(self.station_summary_tab, "Station Summary")
         self.tabs.addTab(self.calibration_tab, "Channel Calibration")
+        self.tabs.addTab(self.logbook_tab, "IC Logbook")
 
 
         # Apply tab styling

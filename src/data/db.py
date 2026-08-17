@@ -35,7 +35,7 @@ class DatabaseError(RuntimeError):
 
 
 def to_text(value) -> str:
-    """Render a DB value the way the old file backend did — as a string.
+    """Render a DB value the way the old file backend did, as a string.
 
     ``None`` becomes ``""`` and dates become ``YYYY-MM-DD`` so all the existing
     string-based parsing/formatting in the managers keeps working unchanged.
@@ -81,7 +81,7 @@ def ensure_driver(driver_name: str) -> None:
     """Make sure the ODBC ``driver_name`` is installed.
 
     If it isn't, launch the bundled installer (``driver/msodbcsql.msi``) and
-    wait for it to finish, then re-check — instead of letting the connection
+    wait for it to finish, then re-check, instead of letting the connection
     crash with a cryptic 'driver not found'. Raises :class:`DatabaseError` if
     no installer is available or the driver is still missing afterward.
     """
@@ -105,7 +105,7 @@ def ensure_driver(driver_name: str) -> None:
             f"found in {_DRIVER_DIR}."
         )
 
-    print(f"ODBC driver '{driver_name}' not found — launching installer "
+    print(f"ODBC driver '{driver_name}' not found, launching installer "
           f"{installer.name}; please complete the installation...")
     try:
         if installer.suffix.lower() == ".msi":
@@ -122,7 +122,7 @@ def ensure_driver(driver_name: str) -> None:
             f"ODBC driver '{driver_name}' is still not available after running "
             f"{installer.name}. If you just installed it, please restart the app."
         )
-    print(f"ODBC driver '{driver_name}' installed — continuing.")
+    print(f"ODBC driver '{driver_name}' installed, continuing.")
 
 
 class Database:

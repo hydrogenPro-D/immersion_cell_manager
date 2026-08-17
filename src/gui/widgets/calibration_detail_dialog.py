@@ -12,8 +12,8 @@ from PyQt6.QtWidgets import (
     QAbstractItemView, QFrame, QWidget, QScrollArea, QGraphicsDropShadowEffect,
     QStyle, QStyledItemDelegate, QStyleOptionViewItem, QComboBox, QTextEdit,
 )
-from PyQt6.QtCore import Qt, QDate, QRegularExpression
-from PyQt6.QtGui import QColor, QPen, QRegularExpressionValidator
+from PyQt6.QtCore import Qt, QDate, QRegularExpression, QObject, QEvent, QTimer
+from PyQt6.QtGui import QColor, QPen, QRegularExpressionValidator, QPainter
 
 from src.data.calibration_manager import (
     POTENTIAL_COLUMNS, STATUS_PASS, STATUS_FAIL, STATUS_AWAITING, STATUS_READY,
@@ -56,46 +56,115 @@ _DELETE_STYLE = (
 )
 
 
-class _RowBorderDelegate(QStyledItemDelegate):
-    """Marks the selected row with a thin black outline instead of a colored fill.
+def draw_row_border(painter, option, index, color, width):
+    """Outline a row cell: top/bottom on every column, left on the first column
+    and right on the last, so adjacent cells join into one continuous outline."""
+    painter.save()
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+    painter.setPen(QPen(color, width))
+    rect = option.rect
+    painter.drawLine(rect.left(), rect.top(), rect.right(), rect.top())
+    painter.drawLine(rect.left(), rect.bottom(), rect.right(), rect.bottom())
+    if index.column() == 0:
+        painter.drawLine(rect.left(), rect.top(), rect.left(), rect.bottom())
+    if index.column() == index.model().columnCount() - 1:
+        painter.drawLine(rect.right() - 1, rect.top(), rect.right() - 1, rect.bottom())
+    painter.restore()
 
-    Clearing the selected state before the base paint keeps each cell's own
-    background/foreground (e.g. the colored Decision/Status pill), then a 1px
-    border is drawn around the row (top/bottom on every cell; left on the first
-    column, right on the last).
+
+# Whole-row highlight colors (match the IC Logbook tab).
+HOVER_BORDER = QColor("#3FA3A3")     # thin teal on the hovered row
+SELECTED_BORDER = QColor("#1F6B6B")  # thicker darker teal on the selected row
+
+
+class _RowBorderDelegate(QStyledItemDelegate):
+    """Outlines the hovered row (thin) and the selected row (thicker) with a
+    border instead of a colored fill.
+
+    Clearing the selected/hover state before the base paint keeps each cell's own
+    background/foreground (e.g. the colored Decision/Status pill); the outline is
+    drawn on top afterwards.
     """
 
     def paint(self, painter, option, index):
         opt = QStyleOptionViewItem(option)
         selected = bool(opt.state & QStyle.StateFlag.State_Selected)
-        # Never paint the selection / hover / focus fill — keep each cell's own
-        # colors (e.g. the status pill). The selected row gets an outline below.
+        # Never paint the selection / hover / focus fill, keep each cell's own
+        # colors (e.g. the status pill). The row gets an outline below.
         opt.state &= ~(
             QStyle.StateFlag.State_Selected
             | QStyle.StateFlag.State_MouseOver
             | QStyle.StateFlag.State_HasFocus
         )
         super().paint(painter, opt, index)
-        if not selected:
-            return
-        # Outline the row. Use the full cell rect (no inset) so the top/bottom
-        # segments of adjacent cells join into one continuous line (an inset left
-        # a 1px gap at every column boundary — the "dashed" look).
-        painter.save()
-        painter.setPen(QPen(QColor("#333333"), 1))
-        rect = option.rect
-        painter.drawLine(rect.left(), rect.top(), rect.right(), rect.top())
-        painter.drawLine(rect.left(), rect.bottom(), rect.right(), rect.bottom())
-        if index.column() == 0:
-            painter.drawLine(rect.left(), rect.top(), rect.left(), rect.bottom())
-        if index.column() == index.model().columnCount() - 1:
-            painter.drawLine(rect.right() - 1, rect.top(), rect.right() - 1, rect.bottom())
-        painter.restore()
+        if selected:
+            draw_row_border(painter, option, index, SELECTED_BORDER, 2)
+        elif getattr(self.parent(), "_hover_row", -1) == index.row():
+            draw_row_border(painter, option, index, HOVER_BORDER, 1)
 
 
 def apply_row_border_selection(table) -> None:
-    """Style ``table`` so the selected row shows a thin black outline, no fill."""
+    """Style ``table`` so the selected row shows a thin outline, no fill."""
     table.setItemDelegate(_RowBorderDelegate(table))
+
+
+class _RowHoverToggle(QObject):
+    """Whole-row hover highlight + click-to-toggle selection on a table.
+
+    Installed on the table's viewport: tracks the hovered row (drives the
+    delegate's hover outline) and lets a re-click on the selected row deselect
+    it. The deselect is deferred to the next event-loop turn so it runs *after*
+    the view's own re-selection on release (clearing inline wouldn't stick).
+    """
+
+    def __init__(self, table):
+        super().__init__(table)
+        self._table = table
+        self._toggle_row = -1
+
+    def _row_at(self, event) -> int:
+        idx = self._table.indexAt(event.position().toPoint())
+        return idx.row() if idx.isValid() else -1
+
+    def _selected_row(self) -> int:
+        rows = self._table.selectionModel().selectedRows()
+        return rows[0].row() if rows else -1
+
+    def _set_hover(self, row: int) -> None:
+        if row != getattr(self._table, "_hover_row", -1):
+            self._table._hover_row = row
+            self._table.viewport().update()
+
+    def _clear_selection(self) -> None:
+        self._table.clearSelection()
+        self._table.viewport().update()
+
+    def eventFilter(self, obj, event):
+        et = event.type()
+        if et == QEvent.Type.MouseMove:
+            self._set_hover(self._row_at(event))
+        elif et == QEvent.Type.Leave:
+            self._set_hover(-1)
+        elif et == QEvent.Type.MouseButtonPress \
+                and event.button() == Qt.MouseButton.LeftButton:
+            r = self._row_at(event)
+            self._toggle_row = r if r != -1 and r == self._selected_row() else -1
+        elif et == QEvent.Type.MouseButtonRelease \
+                and event.button() == Qt.MouseButton.LeftButton:
+            if self._toggle_row != -1 and self._row_at(event) == self._toggle_row:
+                QTimer.singleShot(0, self._clear_selection)
+            self._toggle_row = -1
+        return False
+
+
+def install_row_toggle_deselect(table) -> None:
+    """Add whole-row hover highlighting + re-click-to-deselect to ``table``."""
+    table._hover_row = -1
+    table.setMouseTracking(True)
+    table.viewport().setMouseTracking(True)
+    # No native per-cell hover fill; we draw a whole-row outline instead.
+    table.viewport().setAttribute(Qt.WidgetAttribute.WA_Hover, False)
+    table.viewport().installEventFilter(_RowHoverToggle(table))
 
 
 class AddMeasurementDialog(QDialog):
@@ -119,7 +188,7 @@ class AddMeasurementDialog(QDialog):
     def _build(self):
         self.editing = self.measurement is not None
         self.setWindowTitle(
-            f"{'Edit' if self.editing else 'Add'} measurement — channel {self.channel}"
+            f"{'Edit' if self.editing else 'Add'} measurement, channel {self.channel}"
         )
         self.setModal(True)
         self.resize(480, 640)
@@ -233,7 +302,7 @@ class AddMeasurementDialog(QDialog):
             if self.manager.is_locked(self.channel):
                 self.decision_combo.setEnabled(False)
                 self.decision_combo.setToolTip(
-                    "Channel is In use — free the cell to change the verdict.")
+                    "Channel is In use, free the cell to change the verdict.")
             field("Decision", self.decision_combo)
 
         form.addStretch(1)
@@ -288,7 +357,7 @@ class AddMeasurementDialog(QDialog):
         return values
 
     def _missing_required(self, values: dict) -> list:
-        """Required fields left blank — everything except the IC number."""
+        """Required fields left blank, everything except the IC number."""
         missing = []
         if not values.get("measured_by"):
             missing.append("Measured by")
@@ -367,7 +436,7 @@ class CalibrationDetailDialog(QDialog):
         super().__init__(parent)
         self.channel = channel
         self.manager = manager
-        # on_decision(channel, passed: bool) — lets the caller update the cell.
+        # on_decision(channel, passed: bool), lets the caller update the cell.
         self.on_decision = on_decision
         # Locked when the cell is In use: no new measurement / decision allowed.
         self.locked = manager.is_locked(channel)
@@ -379,7 +448,7 @@ class CalibrationDetailDialog(QDialog):
 
     # ------------------------------------------------------------------ UI
     def _build(self):
-        self.setWindowTitle(f"Channel {self.channel} — Calibration")
+        self.setWindowTitle(f"Channel {self.channel}, Calibration")
         self.setModal(True)
         self.resize(700, 740)
 
@@ -387,7 +456,7 @@ class CalibrationDetailDialog(QDialog):
         outer.setContentsMargins(18, 18, 18, 16)
         outer.setSpacing(10)
 
-        title = QLabel(f"Channel {self.channel} — Calibration")
+        title = QLabel(f"Channel {self.channel}, Calibration")
         title.setStyleSheet("font-size: 16px; font-weight: 600; color: #1F2A33;")
         outer.addWidget(title)
 
@@ -518,7 +587,7 @@ class CalibrationDetailDialog(QDialog):
         # (also blocked when the cell is In use).
         self.add_btn.setEnabled(not self.locked and not show)
         if self.locked:
-            self.add_btn.setToolTip("Channel is In use — free the cell before calibrating.")
+            self.add_btn.setToolTip("Channel is In use, free the cell before calibrating.")
         elif show:
             self.add_btn.setToolTip("Approve or reject the awaiting measurement before adding another.")
         else:
@@ -532,7 +601,7 @@ class CalibrationDetailDialog(QDialog):
                 self.table.setItem(r, col, QTableWidgetItem(value))
                 col += 1
             for d in rec["deltas"]:
-                item = QTableWidgetItem("—" if d is None else f"{d:.2f}")
+                item = QTableWidgetItem("-" if d is None else f"{d:.2f}")
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.table.setItem(r, col, item)
                 col += 1
@@ -577,7 +646,7 @@ class CalibrationDetailDialog(QDialog):
                 self.pending_table.setItem(r, col, QTableWidgetItem(value))
                 col += 1
             for i, d in enumerate(rec["deltas"]):
-                item = QTableWidgetItem("—" if d is None else f"{d:.2f}")
+                item = QTableWidgetItem("-" if d is None else f"{d:.2f}")
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 lo, hi = bounds[i] if i < len(bounds) else (None, None)
                 out = d is not None and (

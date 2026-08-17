@@ -95,8 +95,8 @@ class StationSummaryManager:
     def get_statistics(self) -> dict:
         """Return ``{"total": n, "status_counts": {...}}`` from the live cells.
 
-        Counts reflect each channel's *current* status in ``icm.cells`` — the
-        source of truth — not the latest history episode. The latest episode can
+        Counts reflect each channel's *current* status in ``icm.cells``, the
+        source of truth, not the latest history episode. The latest episode can
         drift from reality when a channel changes status without a new history
         entry (e.g. it goes back to Available after a repair), which previously
         inflated counts such as "In repair" (15 shown vs. 6 actually in repair).
@@ -147,7 +147,7 @@ class StationSummaryManager:
 
         start_date = self._parse_date(field("Start date", "start_date"))
         if start_date is None:
-            return  # no start date yet — nothing to log
+            return  # no start date yet, nothing to log
 
         try:
             start_hour = int(field("Start hour", "start_hour") or "0")
@@ -318,7 +318,7 @@ class StationSummaryManager:
         status = (entry.get("Status") or entry.get("status") or "").strip()
 
         # A finished test has a real end; its planned end is no longer relevant,
-        # so drop it — no dashed extension for finished experiments.
+        # so drop it, no dashed extension for finished experiments.
         if status.lower() == "test finished":
             expected_end = None
 

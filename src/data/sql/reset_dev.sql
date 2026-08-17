@@ -1,5 +1,5 @@
 -- reset_dev.sql
--- DEV/TEST RESET — drops the icm domain tables so the (edited) migrations
+-- DEV/TEST RESET, drops the icm domain tables so the (edited) migrations
 -- 004-006 can recreate them with the new surrogate-id schema.
 --
 -- *** DESTRUCTIVE: deletes ALL rows in projects / cells / channel_history. ***

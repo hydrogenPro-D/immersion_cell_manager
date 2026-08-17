@@ -53,7 +53,7 @@ class ProjectsManager:
             )
         except DatabaseError:
             try:
-                # is_archived not migrated yet (016) — read without it.
+                # is_archived not migrated yet (016), read without it.
                 records = self._db.fetch_all(
                     "SELECT project_id, color, description, density, fe_ppm "
                     "FROM icm.projects ORDER BY id"
@@ -79,7 +79,7 @@ class ProjectsManager:
 
     # ----------------------------------------------------------- Public API
     def get_projects(self) -> list[str]:
-        """Active (non-archived) project names — the ones assignable to channels."""
+        """Active (non-archived) project names, the ones assignable to channels."""
         return [name for name, _, _, _, _, archived in self._rows() if not archived]
 
     def get_archived_projects(self) -> list[str]:

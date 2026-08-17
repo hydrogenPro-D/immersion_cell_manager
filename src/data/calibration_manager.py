@@ -183,7 +183,7 @@ class CalibrationManager:
         }
 
     def get_channels(self) -> list:
-        """Channels to calibrate — mirrors the immersion cells (in id order)."""
+        """Channels to calibrate, mirrors the immersion cells (in id order)."""
         try:
             rows = self._db.fetch_all("SELECT channel FROM icm.cells ORDER BY id")
         except DatabaseError:
@@ -204,7 +204,7 @@ class CalibrationManager:
                 "  FROM icm.channel_calibration) t WHERE rn = 1"
             )
         except DatabaseError:
-            rows = []  # table not migrated yet — every channel shows Ready to test
+            rows = []  # table not migrated yet, every channel shows Ready to test
         latest = {to_text(r.get("channel")): self._record(r) for r in rows}
 
         # Channels + current cell status come from icm.cells (one query).

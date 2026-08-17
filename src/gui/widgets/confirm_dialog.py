@@ -1,6 +1,6 @@
 """A reusable, prettified confirmation dialog ("Are you sure?" box).
 
-Visually mirrors :class:`EditRowDialog` — a frameless card with a gradient
+Visually mirrors :class:`EditRowDialog`, a frameless card with a gradient
 teal (or red, when destructive) header banner and a white body.
 
 Use :meth:`ConfirmDialog.ask` for a one-liner:
@@ -29,7 +29,7 @@ from src.gui.styles.dialog_styles import DIALOG_STYLE
 
 
 _EXTRA_STYLE = """
-    /* Card body — same look as EditRowDialog's #DialogBody. */
+    /* Card body, same look as EditRowDialog's #DialogBody. */
     QFrame#ConfirmBody {
         background-color: #FFFFFF;
         border-bottom-left-radius: 12px;
@@ -38,7 +38,7 @@ _EXTRA_STYLE = """
         border-top: none;
     }
 
-    /* Gradient header banner — variant decides the palette. */
+    /* Gradient header banner, variant decides the palette. */
     QFrame#ConfirmHeader {
         border-top-left-radius: 12px;
         border-top-right-radius: 12px;

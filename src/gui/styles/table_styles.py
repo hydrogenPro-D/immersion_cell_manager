@@ -1,7 +1,7 @@
 """Table styling for PyQt elements - Modern design."""
 
 # Pixel sizes for scrollbars. Keep these in sync with the values used inside
-# SCROLLBAR_STYLE below — other modules (e.g. activator_gui) import these to
+# SCROLLBAR_STYLE below, other modules (e.g. activator_gui) import these to
 # size sibling widgets so the layout stays aligned if these values change.
 SCROLLBAR_VERTICAL_WIDTH = 25
 SCROLLBAR_HORIZONTAL_HEIGHT = 25

@@ -182,7 +182,7 @@ class OptionalDateEdit(CalendarDateEdit):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumDate(self.UNSET)
-        self.setSpecialValueText("— not set —")
+        self.setSpecialValueText("not set")
         self.setDate(self.UNSET)
         cal = self.calendarWidget()
         # When unset the value is 1900, so the popup would open on Jan 1900.
@@ -584,7 +584,7 @@ class EditRowDialog(QDialog):
             manage_btn = QPushButton("Manage projects")
             manage_btn.setToolTip("Add or remove projects")
             manage_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            # Don't let this button grab the Enter key — in a dialog every
+            # Don't let this button grab the Enter key, in a dialog every
             # QPushButton is an auto-default by default, which made pressing
             # Enter open the projects window instead of saving. Enter should
             # fall through to the dialog's default Save button.
@@ -919,7 +919,7 @@ class EditRowDialog(QDialog):
 
     def save_changes(self):
         """Save changes back to the table and emit signal with row data"""
-        # Build the row data from editor values. Don't touch the table yet —
+        # Build the row data from editor values. Don't touch the table yet,
         # the cells are only written once every validation below has passed, so
         # a blocked save can't leave data sitting in the table that the DB never
         # received (which would then vanish on the next reload/restart).
@@ -958,11 +958,11 @@ class EditRowDialog(QDialog):
         # Available / In repair free the cell: the clearable fields are emptied on
         # save by the clear step below. Guard only the case where the cell was
         # *already* a clearing status on open and the user has since typed new
-        # data but left that status — auto-clearing would silently wipe it, so
+        # data but left that status, auto-clearing would silently wipe it, so
         # block and ask them to pick a data-keeping status (or clear it themselves).
         new_status = row_data[status_col].strip().lower() if status_col is not None else ""
 
-        # Block In use when the channel's latest calibration failed — it needs a
+        # Block In use when the channel's latest calibration failed, it needs a
         # fresh passing calibration first. (Only on the transition into In use.)
         if (new_status == "in use" and self.initial_status != "in use"
                 and self._calibration_failed):
@@ -991,7 +991,7 @@ class EditRowDialog(QDialog):
             )
             return
 
-        # Block In use while a calibration is still awaiting a decision — it has
+        # Block In use while a calibration is still awaiting a decision, it has
         # to be Approved or Rejected first (an In-use cell locks calibration, so
         # a pending measurement couldn't be resolved afterwards).
         if (new_status == "in use" and self.initial_status != "in use"
@@ -1115,7 +1115,7 @@ class EditRowDialog(QDialog):
                 )
                 return
 
-        # Every validation passed — now commit the values into the table.
+        # Every validation passed, now commit the values into the table.
         for column_idx in range(len(self.columns)):
             self.table.setItem(
                 self.row, column_idx, QTableWidgetItem(row_data[column_idx])

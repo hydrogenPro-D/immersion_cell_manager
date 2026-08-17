@@ -5,7 +5,7 @@
 <marker id="arrow" markerWidth="11" markerHeight="11" refX="8" refY="5" orient="auto"><path d="M1,1 L9,5 L1,9" fill="none" stroke="#2C8585" stroke-width="2"/></marker>
 </defs>
 <rect x="0" y="0" width="1010" height="980" fill="#FBFDFD"/>
-<text x="505.0" y="44" text-anchor="middle" font-size="26" font-weight="800" fill="#16322f">Immersion Cell Manager — Database Schema</text>
+<text x="505.0" y="44" text-anchor="middle" font-size="26" font-weight="800" fill="#16322f">Immersion Cell Manager, Database Schema</text>
 <text x="505.0" y="66" text-anchor="middle" font-size="13" fill="#6A7B83">Azure SQL Database · schema [icm]</text>
 <rect x="124" y="435" width="300" height="136" rx="10" fill="#0b3b3b" opacity="0.10"/>
 <rect x="120" y="430" width="300" height="136" rx="10" fill="#FFFFFF" stroke="#CBD9D9" stroke-width="1.5"/>

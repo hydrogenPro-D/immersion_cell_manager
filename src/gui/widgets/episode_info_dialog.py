@@ -2,7 +2,7 @@
 
 Opened when the user double-clicks an episode bar in the Station Summary Gantt
 chart. It mirrors the look of :class:`EditRowDialog` (rounded card, gradient
-header, scrollable body) but every field is shown as plain read-only text — the
+header, scrollable body) but every field is shown as plain read-only text, the
 dialog only presents information and cannot edit anything.
 """
 
@@ -70,7 +70,7 @@ class EpisodeInfoDialog(QDialog):
         super().__init__(parent)
         self.episode = episode or {}
         # True when deleting this episode will also free its cell (it's the
-        # channel's current experiment) — the delete confirmation says so.
+        # channel's current experiment), the delete confirmation says so.
         self._will_free_cell = will_free_cell
         # Set to True when the user confirms deletion / requests a modify; the
         # caller acts on it after exec() returns.
@@ -268,7 +268,7 @@ class EpisodeInfoDialog(QDialog):
         name = QLabel(label_text)
         name.setObjectName("SummaryName")
 
-        value = QLabel(value_text if value_text else "—")
+        value = QLabel(value_text if value_text else "-")
         value.setObjectName("SummaryValue")
         # No wrap: long values extend and the scroll area shows a horizontal
         # scrollbar (matching the vertical one) instead of wrapping.
