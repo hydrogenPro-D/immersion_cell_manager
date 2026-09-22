@@ -602,8 +602,8 @@ class ScoreboardDialog(QDialog):
         # No header: round the body on top and give it a full border so it still
         # reads as a clean card.
         self.setStyleSheet(DIALOG_STYLE + (
-            "QFrame#DialogBody { border-top-left-radius: 12px;"
-            " border-top-right-radius: 12px; border-top: 1px solid #D8E2E8; }"
+            "QFrame#DialogBody { border-top-left-radius: 6px;"
+            " border-top-right-radius: 6px; border-top: 1px solid #D8E2E8; }"
         ))
 
         outer = QVBoxLayout(self)
@@ -776,8 +776,8 @@ class ExperimentDialog(QDialog):
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setStyleSheet(DIALOG_STYLE + (
-            "QFrame#DialogBody { border-top-left-radius: 12px;"
-            " border-top-right-radius: 12px; border-top: 1px solid #D8E2E8; }"
+            "QFrame#DialogBody { border-top-left-radius: 6px;"
+            " border-top-right-radius: 6px; border-top: 1px solid #D8E2E8; }"
         ))
         outer = QVBoxLayout(self)
         outer.setContentsMargins(20, 20, 20, 20)

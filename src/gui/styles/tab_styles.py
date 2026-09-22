@@ -13,7 +13,7 @@ TAB_STYLE = """
     QFrame#PageHeader {
         background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
             stop:0 #55BDBD, stop:1 #3FA3A3);
-        border-radius: 14px;
+        border-radius: 6px;
         border: none;
     }
     QLabel#PageTitle {

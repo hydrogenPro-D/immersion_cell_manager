@@ -1,0 +1,36 @@
+flightbar fell of: flaggging error
+
+
+7:43 today, and chmeical added at migniht
+
+
+
+
+produciton data manager:
+requries a new tab: showing all the electrodes and show which one needs to be tested. 
+
+
+Ask Balázs, how does it work now?
+If we find a bad one, +- scrapped and we need to test the ones around. how do the electricians get the information which one to test??
+
+
+
+
+
+
+
+
+logbook:
+add subtab
+
+rename subtabs name. which ones? and to what?
+
+transfer log to another subtab
+
+ne legyen sortörés ic_id-ban. lehessen bármilyen column resizeable. legyen ic id column szélesebb.
+
+
+in sth is test finished or available, transform data to ic logbook., add missing data
+
+
+

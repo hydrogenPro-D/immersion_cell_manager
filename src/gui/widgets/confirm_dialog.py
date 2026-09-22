@@ -32,16 +32,16 @@ _EXTRA_STYLE = """
     /* Card body, same look as EditRowDialog's #DialogBody. */
     QFrame#ConfirmBody {
         background-color: #FFFFFF;
-        border-bottom-left-radius: 12px;
-        border-bottom-right-radius: 12px;
+        border-bottom-left-radius: 6px;
+        border-bottom-right-radius: 6px;
         border: 1px solid #D8E2E8;
         border-top: none;
     }
 
     /* Gradient header banner, variant decides the palette. */
     QFrame#ConfirmHeader {
-        border-top-left-radius: 12px;
-        border-top-right-radius: 12px;
+        border-top-left-radius: 6px;
+        border-top-right-radius: 6px;
         border: none;
     }
     QFrame#ConfirmHeader[variant="primary"] {
