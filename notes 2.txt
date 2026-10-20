@@ -1,0 +1,42 @@
+
+
+logbook:
+add subtab
+
+rename subtabs name. which ones? and to what?
+
+transfer log to another subtab
+
+
+DONE: in use -> test finished or available offers the experiment to the IC logbook (prefilled form, choose sub-tab, skip possible)
+DONE (app side): logbook rows can be moved to another project (edit window -> Move to other project)
+DONE: + Add project with its own columns (migration 020, run on Test)
+DONE: Manage projects = archive / restore projects, never delete (migration 021, run on Test)
+DONE (app side): rename projects in Manage projects. "Summary" and duplicate names are refused. needs migration 022 (NOT RUN yet)
+
+
+
+
+
+in progress (branch inventory_and_events_tabs, WIP commit "commit saving"):
+- migration 018: inventory items, global cell count, event types with cost recipe, event log with cost snapshot. seeded from IC_Inventory.xlsx (Lids, Screws, nuts, Beaker). RUN on dataloggingTest
+- migration 019: one quantity per item (users don't need usable / not usable / total). quantity = old usable_count, not-usable counts dropped. RUN on dataloggingTest
+- need to order = requirement - quantity. events deduct from quantity
+- Inventory tab (inventory_gui.py): one row card per item, In stock stepper, Need (red/green) of requirement, "requirements for N cells"
+- Event Log tab (event_log_gui.py): log an event, preview cost vs stock, warn if short, deduct on save. delete can restore stock. manage event types dialog
+- style tweaks: smaller corner radii in dialog / tab / confirm styles
+
+
+problems found in the new code (not fixed yet):
+- FIXED: restore inflates stock (event_log_cost.qty now stores what was actually taken, restore gives back exactly that)
+- FIXED: deleting a logged event can now be cancelled (Cancel / Delete only / Delete and restore)
+- FIXED: the 5 s change check watches every icm table and refreshes only the tabs whose tables changed (held while a dialog is open)
+- the 3 older tabs (cells mapping, station summary, calibration) still reload once more after the app's own save; they rely on it to update each other
+- PARTLY FIXED, transactions: each cost line deducts in one proc transaction, delete+restore is one transaction. still separate calls: log insert + its lines, and restore + re-insert when editing
+- event_type.is_archived exists but there is no archive button in the UI
+- GONE: restore to the wrong bucket (no buckets anymore, always quantity)
+- FIXED: +/- click re-reads that one item and updates its card in place
+- FIXED: migrations README.md lists 001-022
+
+
+

@@ -1,0 +1,187 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1430" height="860" viewBox="0 0 1430 860" font-family="Segoe UI,Arial,sans-serif">
+<defs><linearGradient id="gTeal" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3FA3A3"/><stop offset="1" stop-color="#2C8585"/></linearGradient><linearGradient id="gSlate" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7B8A93"/><stop offset="1" stop-color="#5E6C74"/></linearGradient>
+<marker id="arrow" markerWidth="11" markerHeight="11" refX="8" refY="5" orient="auto"><path d="M1,1 L9,5 L1,9" fill="none" stroke="#2C8585" stroke-width="2"/></marker>
+<marker id="arrowGrey" markerWidth="11" markerHeight="11" refX="8" refY="5" orient="auto"><path d="M1,1 L9,5 L1,9" fill="none" stroke="#A9B6BD" stroke-width="2"/></marker>
+<marker id="arrowOrange" markerWidth="11" markerHeight="11" refX="8" refY="5" orient="auto"><path d="M1,1 L9,5 L1,9" fill="none" stroke="#E08A00" stroke-width="2"/></marker>
+</defs>
+<rect x="0" y="0" width="1430" height="860" fill="#FBFDFD"/>
+<text x="715.0" y="44" text-anchor="middle" font-size="26" font-weight="800" fill="#16322f">Inventory + Event Log, Database Schema</text>
+<text x="715.0" y="66" text-anchor="middle" font-size="13" fill="#6A7B83">migrations 018 + 019 · schema [icm] · teal = inventory, slate = events</text>
+<rect x="44" y="125" width="360" height="186" rx="10" fill="#0b3b3b" opacity="0.10"/>
+<rect x="40" y="120" width="360" height="186" rx="10" fill="#FFFFFF" stroke="#CBD9D9" stroke-width="1.5"/>
+<path d="M40,130 Q40,120 50,120 L390,120 Q400,120 400,130 L400,156 L40,156 Z" fill="url(#gTeal)"/>
+<text x="56" y="144" font-family="Segoe UI,Arial,sans-serif" font-size="15" font-weight="700" fill="#FFFFFF">icm.inventory_item</text>
+<line x1="40" y1="156" x2="400" y2="156" stroke="#CBD9D9" stroke-width="1"/>
+<rect x="52" y="161" width="22" height="15" rx="4" fill="#E6B400"/><text x="63" y="172" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#FFFFFF">PK</text>
+<text x="137" y="172.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="700" fill="#11201f">id</text>
+<text x="386" y="172.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">INT IDENTITY</text>
+<rect x="41.5" y="181" width="357" height="25" fill="#F4FAFA"/>
+<rect x="52" y="186" width="22" height="15" rx="4" fill="#8895A0"/><text x="63" y="197" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#FFFFFF">NN</text>
+<text x="137" y="197.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="500" fill="#243038">name</text>
+<text x="386" y="197.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">NVARCHAR(128)</text>
+<rect x="52" y="211" width="22" height="15" rx="4" fill="#8895A0"/><text x="63" y="222" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#FFFFFF">NN</text>
+<text x="137" y="222.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="500" fill="#243038">per_cell_qty</text>
+<text x="386" y="222.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">FLOAT = 0</text>
+<rect x="41.5" y="231" width="357" height="25" fill="#F4FAFA"/>
+<rect x="52" y="236" width="22" height="15" rx="4" fill="#E9DDF3"/><text x="63" y="247" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#5B3A80">CK</text>
+<rect x="77" y="236" width="22" height="15" rx="4" fill="#8895A0"/><text x="88" y="247" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#FFFFFF">NN</text>
+<text x="137" y="247.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="500" fill="#243038">quantity</text>
+<text x="386" y="247.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">INT = 0, >= 0</text>
+<rect x="52" y="261" width="22" height="15" rx="4" fill="#8895A0"/><text x="63" y="272" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#FFFFFF">NN</text>
+<text x="137" y="272.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="500" fill="#243038">created_at</text>
+<text x="386" y="272.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">DATETIME2</text>
+<rect x="41.5" y="281" width="357" height="25" fill="#F4FAFA"/>
+<text x="137" y="297.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="500" fill="#243038">updated_at</text>
+<text x="386" y="297.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">DATETIME2</text>
+<rect x="534" y="125" width="360" height="136" rx="10" fill="#0b3b3b" opacity="0.10"/>
+<rect x="530" y="120" width="360" height="136" rx="10" fill="#FFFFFF" stroke="#CBD9D9" stroke-width="1.5"/>
+<path d="M530,130 Q530,120 540,120 L880,120 Q890,120 890,130 L890,156 L530,156 Z" fill="url(#gSlate)"/>
+<text x="546" y="144" font-family="Segoe UI,Arial,sans-serif" font-size="15" font-weight="700" fill="#FFFFFF">icm.event_type_cost</text>
+<line x1="530" y1="156" x2="890" y2="156" stroke="#CBD9D9" stroke-width="1"/>
+<rect x="542" y="161" width="22" height="15" rx="4" fill="#E6B400"/><text x="553" y="172" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#FFFFFF">PK</text>
+<text x="627" y="172.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="700" fill="#11201f">id</text>
+<text x="876" y="172.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">INT IDENTITY</text>
+<rect x="531.5" y="181" width="357" height="25" fill="#F4FAFA"/>
+<rect x="542" y="186" width="22" height="15" rx="4" fill="#2C8585"/><text x="553" y="197" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#FFFFFF">FK</text>
+<rect x="567" y="186" width="22" height="15" rx="4" fill="#F4B400"/><text x="578" y="197" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#5A4500">UQ</text>
+<rect x="592" y="186" width="22" height="15" rx="4" fill="#8895A0"/><text x="603" y="197" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#FFFFFF">NN</text>
+<text x="627" y="197.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="500" fill="#243038">event_type_id</text>
+<text x="876" y="197.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">INT</text>
+<rect x="542" y="211" width="22" height="15" rx="4" fill="#2C8585"/><text x="553" y="222" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#FFFFFF">FK</text>
+<rect x="567" y="211" width="22" height="15" rx="4" fill="#F4B400"/><text x="578" y="222" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#5A4500">UQ</text>
+<rect x="592" y="211" width="22" height="15" rx="4" fill="#8895A0"/><text x="603" y="222" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#FFFFFF">NN</text>
+<text x="627" y="222.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="500" fill="#243038">item_id</text>
+<text x="876" y="222.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">INT</text>
+<rect x="531.5" y="231" width="357" height="25" fill="#F4FAFA"/>
+<rect x="542" y="236" width="22" height="15" rx="4" fill="#8895A0"/><text x="553" y="247" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#FFFFFF">NN</text>
+<text x="627" y="247.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="500" fill="#243038">qty</text>
+<text x="876" y="247.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">INT = 0</text>
+<rect x="1024" y="125" width="360" height="186" rx="10" fill="#0b3b3b" opacity="0.10"/>
+<rect x="1020" y="120" width="360" height="186" rx="10" fill="#FFFFFF" stroke="#CBD9D9" stroke-width="1.5"/>
+<path d="M1020,130 Q1020,120 1030,120 L1370,120 Q1380,120 1380,130 L1380,156 L1020,156 Z" fill="url(#gSlate)"/>
+<text x="1036" y="144" font-family="Segoe UI,Arial,sans-serif" font-size="15" font-weight="700" fill="#FFFFFF">icm.event_type</text>
+<line x1="1020" y1="156" x2="1380" y2="156" stroke="#CBD9D9" stroke-width="1"/>
+<rect x="1032" y="161" width="22" height="15" rx="4" fill="#E6B400"/><text x="1043" y="172" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#FFFFFF">PK</text>
+<text x="1117" y="172.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="700" fill="#11201f">id</text>
+<text x="1366" y="172.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">INT IDENTITY</text>
+<rect x="1021.5" y="181" width="357" height="25" fill="#F4FAFA"/>
+<rect x="1032" y="186" width="22" height="15" rx="4" fill="#8895A0"/><text x="1043" y="197" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#FFFFFF">NN</text>
+<text x="1117" y="197.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="500" fill="#243038">name</text>
+<text x="1366" y="197.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">NVARCHAR(128)</text>
+<text x="1117" y="222.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="500" fill="#243038">description</text>
+<text x="1366" y="222.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">NVARCHAR(MAX)</text>
+<rect x="1021.5" y="231" width="357" height="25" fill="#F4FAFA"/>
+<rect x="1032" y="236" width="22" height="15" rx="4" fill="#8895A0"/><text x="1043" y="247" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#FFFFFF">NN</text>
+<text x="1117" y="247.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="500" fill="#243038">is_archived</text>
+<text x="1366" y="247.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">BIT = 0</text>
+<rect x="1032" y="261" width="22" height="15" rx="4" fill="#8895A0"/><text x="1043" y="272" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#FFFFFF">NN</text>
+<text x="1117" y="272.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="500" fill="#243038">created_at</text>
+<text x="1366" y="272.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">DATETIME2</text>
+<rect x="1021.5" y="281" width="357" height="25" fill="#F4FAFA"/>
+<text x="1117" y="297.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="500" fill="#243038">updated_at</text>
+<text x="1366" y="297.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">DATETIME2</text>
+<rect x="534" y="445" width="360" height="161" rx="10" fill="#0b3b3b" opacity="0.10"/>
+<rect x="530" y="440" width="360" height="161" rx="10" fill="#FFFFFF" stroke="#CBD9D9" stroke-width="1.5"/>
+<path d="M530,450 Q530,440 540,440 L880,440 Q890,440 890,450 L890,476 L530,476 Z" fill="url(#gSlate)"/>
+<text x="546" y="464" font-family="Segoe UI,Arial,sans-serif" font-size="15" font-weight="700" fill="#FFFFFF">icm.event_log_cost</text>
+<line x1="530" y1="476" x2="890" y2="476" stroke="#CBD9D9" stroke-width="1"/>
+<rect x="542" y="481" width="22" height="15" rx="4" fill="#E6B400"/><text x="553" y="492" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#FFFFFF">PK</text>
+<text x="627" y="492.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="700" fill="#11201f">id</text>
+<text x="876" y="492.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">INT IDENTITY</text>
+<rect x="531.5" y="501" width="357" height="25" fill="#F4FAFA"/>
+<rect x="542" y="506" width="22" height="15" rx="4" fill="#2C8585"/><text x="553" y="517" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#FFFFFF">FK</text>
+<rect x="567" y="506" width="22" height="15" rx="4" fill="#E2EAEF"/><text x="578" y="517" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#4A5A66">IX</text>
+<rect x="592" y="506" width="22" height="15" rx="4" fill="#8895A0"/><text x="603" y="517" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#FFFFFF">NN</text>
+<text x="627" y="517.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="500" fill="#243038">event_log_id</text>
+<text x="876" y="517.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">INT</text>
+<text x="627" y="542.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="500" fill="#243038">item_id</text>
+<text x="876" y="542.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">INT (no FK)</text>
+<rect x="531.5" y="551" width="357" height="25" fill="#F4FAFA"/>
+<text x="627" y="567.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="500" fill="#243038">item_name</text>
+<text x="876" y="567.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">NVARCHAR(128)</text>
+<rect x="542" y="581" width="22" height="15" rx="4" fill="#8895A0"/><text x="553" y="592" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#FFFFFF">NN</text>
+<text x="627" y="592.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="500" fill="#243038">qty</text>
+<text x="876" y="592.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">INT = 0</text>
+<rect x="1024" y="445" width="360" height="261" rx="10" fill="#0b3b3b" opacity="0.10"/>
+<rect x="1020" y="440" width="360" height="261" rx="10" fill="#FFFFFF" stroke="#CBD9D9" stroke-width="1.5"/>
+<path d="M1020,450 Q1020,440 1030,440 L1370,440 Q1380,440 1380,450 L1380,476 L1020,476 Z" fill="url(#gSlate)"/>
+<text x="1036" y="464" font-family="Segoe UI,Arial,sans-serif" font-size="15" font-weight="700" fill="#FFFFFF">icm.event_log</text>
+<line x1="1020" y1="476" x2="1380" y2="476" stroke="#CBD9D9" stroke-width="1"/>
+<rect x="1032" y="481" width="22" height="15" rx="4" fill="#E6B400"/><text x="1043" y="492" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#FFFFFF">PK</text>
+<text x="1117" y="492.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="700" fill="#11201f">id</text>
+<text x="1366" y="492.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">INT IDENTITY</text>
+<rect x="1021.5" y="501" width="357" height="25" fill="#F4FAFA"/>
+<rect x="1032" y="506" width="22" height="15" rx="4" fill="#2C8585"/><text x="1043" y="517" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#FFFFFF">FK</text>
+<text x="1117" y="517.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="500" fill="#243038">event_type_id</text>
+<text x="1366" y="517.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">INT NULL</text>
+<rect x="1032" y="531" width="22" height="15" rx="4" fill="#8895A0"/><text x="1043" y="542" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#FFFFFF">NN</text>
+<text x="1117" y="542.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="500" fill="#243038">event_name</text>
+<text x="1366" y="542.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">NVARCHAR(128)</text>
+<rect x="1021.5" y="551" width="357" height="25" fill="#F4FAFA"/>
+<text x="1117" y="567.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="500" fill="#243038">person</text>
+<text x="1366" y="567.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">NVARCHAR(128)</text>
+<text x="1117" y="592.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="500" fill="#243038">comment</text>
+<text x="1366" y="592.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">NVARCHAR(MAX)</text>
+<rect x="1021.5" y="601" width="357" height="25" fill="#F4FAFA"/>
+<text x="1117" y="617.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="500" fill="#243038">event_date</text>
+<text x="1366" y="617.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">DATE</text>
+<rect x="1032" y="631" width="22" height="15" rx="4" fill="#8895A0"/><text x="1043" y="642" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#FFFFFF">NN</text>
+<text x="1117" y="642.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="500" fill="#243038">logged_at</text>
+<text x="1366" y="642.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">DATETIME2</text>
+<rect x="1021.5" y="651" width="357" height="25" fill="#F4FAFA"/>
+<rect x="1032" y="656" width="22" height="15" rx="4" fill="#8895A0"/><text x="1043" y="667" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#FFFFFF">NN</text>
+<text x="1117" y="667.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="500" fill="#243038">created_at</text>
+<text x="1366" y="667.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">DATETIME2</text>
+<text x="1117" y="692.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="500" fill="#243038">updated_at</text>
+<text x="1366" y="692.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">DATETIME2</text>
+<rect x="44" y="445" width="360" height="86" rx="10" fill="#0b3b3b" opacity="0.10"/>
+<rect x="40" y="440" width="360" height="86" rx="10" fill="#FFFFFF" stroke="#CBD9D9" stroke-width="1.5"/>
+<path d="M40,450 Q40,440 50,440 L390,440 Q400,440 400,450 L400,476 L40,476 Z" fill="url(#gTeal)"/>
+<text x="56" y="464" font-family="Segoe UI,Arial,sans-serif" font-size="15" font-weight="700" fill="#FFFFFF">icm.inventory_config</text>
+<line x1="40" y1="476" x2="400" y2="476" stroke="#CBD9D9" stroke-width="1"/>
+<rect x="52" y="481" width="22" height="15" rx="4" fill="#E6B400"/><text x="63" y="492" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#FFFFFF">PK</text>
+<rect x="77" y="481" width="22" height="15" rx="4" fill="#E9DDF3"/><text x="88" y="492" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#5B3A80">CK</text>
+<text x="137" y="492.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="700" fill="#11201f">id</text>
+<text x="386" y="492.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">INT, = 1</text>
+<rect x="41.5" y="501" width="357" height="25" fill="#F4FAFA"/>
+<rect x="52" y="506" width="22" height="15" rx="4" fill="#8895A0"/><text x="63" y="517" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#FFFFFF">NN</text>
+<text x="137" y="517.5" font-family="Segoe UI,Arial,sans-serif" font-size="13" font-weight="500" fill="#243038">cell_count</text>
+<text x="386" y="517.5" text-anchor="end" font-family="Consolas,Menlo,monospace" font-size="11" fill="#5A6B73">INT = 70</text>
+<path d="M530,218.5 C485,218.5 445,164.5 416,164.5 H402" fill="none" stroke="#2C8585" stroke-width="2.2" marker-end="url(#arrow)"/>
+<circle cx="530" cy="218.5" r="3.5" fill="#2C8585"/>
+<g><rect x="433.8" y="184.5" width="62.4" height="17" rx="8" fill="#FBFDFD" stroke="#2C8585" stroke-width="1"/><text x="465.0" y="197.5" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="10" font-weight="700" fill="#2C8585">CASCADE</text></g>
+<path d="M890,193.5 C935,193.5 975,168.5 1004,168.5 H1018" fill="none" stroke="#2C8585" stroke-width="2.2" marker-end="url(#arrow)"/>
+<circle cx="890" cy="193.5" r="3.5" fill="#2C8585"/>
+<g><rect x="923.8" y="172.0" width="62.4" height="17" rx="8" fill="#FBFDFD" stroke="#2C8585" stroke-width="1"/><text x="955.0" y="185.0" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="10" font-weight="700" fill="#2C8585">CASCADE</text></g>
+<path d="M1380,513.5 H1406 V168.5 H1382" fill="none" stroke="#2C8585" stroke-width="2.2" marker-end="url(#arrow)"/>
+<circle cx="1380" cy="513.5" r="3.5" fill="#2C8585"/>
+<g transform="rotate(-90 1406 341.0)"><rect x="1371.2" y="332.0" width="69.6" height="17" rx="8" fill="#FBFDFD" stroke="#2C8585" stroke-width="1"/><text x="1406" y="345.0" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="10" font-weight="700" fill="#2C8585">SET NULL</text></g>
+<path d="M890,513.5 C935,513.5 975,488.5 1004,488.5 H1018" fill="none" stroke="#2C8585" stroke-width="2.2" marker-end="url(#arrow)"/>
+<circle cx="890" cy="513.5" r="3.5" fill="#2C8585"/>
+<g><rect x="923.8" y="506.0" width="62.4" height="17" rx="8" fill="#FBFDFD" stroke="#2C8585" stroke-width="1"/><text x="955.0" y="519.0" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="10" font-weight="700" fill="#2C8585">CASCADE</text></g>
+<path d="M530,538.5 C470,538.5 460,172.5 416,172.5 H402" fill="none" stroke="#A9B6BD" stroke-width="2.2" stroke-dasharray="5 4" marker-end="url(#arrowGrey)"/>
+<circle cx="530" cy="538.5" r="3.5" fill="#A9B6BD"/>
+<g><rect x="441.0" y="321" width="48.0" height="17" rx="8" fill="#FBFDFD" stroke="#8794A0" stroke-width="1"/><text x="465.0" y="334" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="10" font-weight="700" fill="#8794A0">no FK</text></g>
+<text x="44" y="554" font-size="12" fill="#6A7B83">Single row (id = 1). Not linked: cell_count drives</text>
+<text x="44" y="571" font-size="12" fill="#6A7B83">requirement = per_cell_qty x cell_count and</text>
+<text x="44" y="588" font-size="12" fill="#6A7B83">need to order = requirement - quantity,</text>
+<text x="44" y="605" font-size="12" fill="#6A7B83">both computed in the app.</text>
+<rect x="530" y="730" width="850" height="100" rx="10" fill="#FFFFFF" stroke="#CBD9D9" stroke-width="1.2"/>
+<text x="546" y="754" font-size="13" font-weight="700" fill="#16322f">Legend</text>
+<rect x="546" y="766" width="22" height="15" rx="4" fill="#E6B400"/><text x="557" y="777" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#FFFFFF">PK</text>
+<text x="574" y="778" font-size="12" fill="#4A5A66">primary key</text>
+<rect x="676" y="766" width="22" height="15" rx="4" fill="#2C8585"/><text x="687" y="777" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#FFFFFF">FK</text>
+<text x="704" y="778" font-size="12" fill="#4A5A66">foreign key</text>
+<rect x="806" y="766" width="22" height="15" rx="4" fill="#F4B400"/><text x="817" y="777" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#5A4500">UQ</text>
+<text x="834" y="778" font-size="12" fill="#4A5A66">unique (pair)</text>
+<rect x="936" y="766" width="22" height="15" rx="4" fill="#8895A0"/><text x="947" y="777" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#FFFFFF">NN</text>
+<text x="964" y="778" font-size="12" fill="#4A5A66">not null</text>
+<rect x="1066" y="766" width="22" height="15" rx="4" fill="#E2EAEF"/><text x="1077" y="777" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#4A5A66">IX</text>
+<text x="1094" y="778" font-size="12" fill="#4A5A66">index</text>
+<rect x="1196" y="766" width="22" height="15" rx="4" fill="#E9DDF3"/><text x="1207" y="777" text-anchor="middle" font-family="Segoe UI,Arial,sans-serif" font-size="9" font-weight="700" fill="#5B3A80">CK</text>
+<text x="1224" y="778" font-size="12" fill="#4A5A66">check</text>
+<line x1="546" y1="806" x2="580" y2="806" stroke="#2C8585" stroke-width="2.2"/>
+<text x="588" y="810" font-size="12" fill="#4A5A66">FK, arrow points to the referenced table; label = ON DELETE</text>
+<line x1="1000" y1="806" x2="1034" y2="806" stroke="#A9B6BD" stroke-width="2.2" stroke-dasharray="5 4"/>
+<text x="1042" y="810" font-size="12" fill="#4A5A66">loose reference, no FK (history survives deletes)</text>
+</svg>

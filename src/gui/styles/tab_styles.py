@@ -13,7 +13,7 @@ TAB_STYLE = """
     QFrame#PageHeader {
         background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
             stop:0 #55BDBD, stop:1 #3FA3A3);
-        border-radius: 14px;
+        border-radius: 3px;
         border: none;
     }
     QLabel#PageTitle {
@@ -31,7 +31,7 @@ TAB_STYLE = """
     QLabel#PageBadge {
         color: #0B3B3B;
         background-color: rgba(255, 255, 255, 0.85);
-        border-radius: 12px;
+        border-radius: 0px;
         padding: 6px 14px;
         font-size: 12px;
         font-weight: 600;
@@ -66,7 +66,7 @@ TAB_STYLE = """
     /* ---------- Buttons ---------- */
     QPushButton#PrimaryButton {
         padding: 10px 20px;
-        border-radius: 10px;
+        border-radius: 3px;
         font-size: 12px;
         font-weight: 600;
         letter-spacing: 0.4px;
@@ -91,7 +91,7 @@ TAB_STYLE = """
 
     QPushButton#DangerButton {
         padding: 10px 20px;
-        border-radius: 10px;
+        border-radius: 3px;
         font-size: 12px;
         font-weight: 600;
         letter-spacing: 0.4px;

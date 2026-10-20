@@ -13,8 +13,8 @@ DIALOG_STYLE = """
     QFrame#DialogHeader {
         background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
             stop:0 #55BDBD, stop:1 #3FA3A3);
-        border-top-left-radius: 12px;
-        border-top-right-radius: 12px;
+        border-top-left-radius: 6px;
+        border-top-right-radius: 6px;
         border: none;
     }
     QLabel#DialogTitle {
@@ -34,8 +34,8 @@ DIALOG_STYLE = """
     /* Card body */
     QFrame#DialogBody {
         background-color: #FFFFFF;
-        border-bottom-left-radius: 12px;
-        border-bottom-right-radius: 12px;
+        border-bottom-left-radius: 6px;
+        border-bottom-right-radius: 6px;
         border: 1px solid #D8E2E8;
         border-top: none;
     }
@@ -55,7 +55,7 @@ DIALOG_STYLE = """
     QLineEdit {
         background-color: #F7FAFC;
         border: 1px solid #D8E2E8;
-        border-radius: 8px;
+        border-radius: 5px;
         padding: 9px 12px;
         min-height: 22px;
         font-size: 13px;
@@ -90,7 +90,7 @@ DIALOG_STYLE = """
     QTextEdit#CommentsField {
         background-color: #F7FAFC;
         border: 1px solid #D8E2E8;
-        border-radius: 8px;
+        border-radius: 5px;
         padding: 6px 10px;
         font-size: 13px;
         color: #1F2A33;
@@ -110,7 +110,7 @@ DIALOG_STYLE = """
     QComboBox#ChoiceField {
         background-color: #F7FAFC;
         border: 1px solid #D8E2E8;
-        border-radius: 8px;
+        border-radius: 5px;
         padding: 8px 12px;
         min-height: 22px;
         font-size: 13px;
@@ -144,7 +144,7 @@ DIALOG_STYLE = """
     QComboBox#ChoiceField QAbstractItemView {
         background-color: #FFFFFF;
         border: 1px solid #D8E2E8;
-        border-radius: 8px;
+        border-radius: 5px;
         padding: 4px;
         selection-background-color: #BFE6E6;
         selection-color: #0B3B3B;
@@ -152,14 +152,14 @@ DIALOG_STYLE = """
     }
     QComboBox#ChoiceField QAbstractItemView::item {
         padding: 7px 10px;
-        border-radius: 6px;
+        border-radius: 4px;
     }
 
     /* --------- Project (QComboBox with visible dropdown arrow) --------- */
     QComboBox#ProjectField {
         background-color: #F7FAFC;
         border: 1px solid #D8E2E8;
-        border-radius: 8px;
+        border-radius: 5px;
         padding: 8px 12px;
         padding-right: 34px;
         min-height: 22px;
@@ -190,7 +190,7 @@ DIALOG_STYLE = """
     QComboBox#ProjectField QAbstractItemView {
         background-color: #FFFFFF;
         border: 1px solid #D8E2E8;
-        border-radius: 8px;
+        border-radius: 5px;
         padding: 4px;
         selection-background-color: #BFE6E6;
         selection-color: #0B3B3B;
@@ -198,14 +198,14 @@ DIALOG_STYLE = """
     }
     QComboBox#ProjectField QAbstractItemView::item {
         padding: 7px 10px;
-        border-radius: 6px;
+        border-radius: 4px;
     }
 
     /* --------- Date (QDateEdit) --------- */
     QDateEdit#DateField {
         background-color: #F7FAFC;
         border: 1px solid #D8E2E8;
-        border-radius: 8px;
+        border-radius: 5px;
         padding: 8px 12px;
         min-height: 22px;
         font-size: 13px;
@@ -242,7 +242,7 @@ DIALOG_STYLE = """
         color: #1F2A33;
         background-color: transparent;
         padding: 6px;
-        border-radius: 6px;
+        border-radius: 4px;
     }
     QCalendarWidget QToolButton:hover {
         background-color: #E6F4F4;
@@ -259,7 +259,7 @@ DIALOG_STYLE = """
         background-color: #FFFFFF;
         color: #1F2A33;
         border: 1px solid #D8E2E8;
-        border-radius: 6px;
+        border-radius: 4px;
         min-width: 64px;
         padding: 2px 6px;
         margin: 4px 2px;
@@ -288,7 +288,7 @@ DIALOG_STYLE = """
     QSpinBox#HoursSpinBox {
         background-color: #F7FAFC;
         border: 1px solid #D8E2E8;
-        border-radius: 8px;
+        border-radius: 5px;
         padding: 8px 12px;
         min-height: 22px;
         font-size: 13px;
@@ -337,7 +337,7 @@ DIALOG_STYLE = """
     QPushButton {
         min-width: 96px;
         padding: 9px 18px;
-        border-radius: 8px;
+        border-radius: 5px;
         font-size: 12px;
         font-weight: 600;
         letter-spacing: 0.4px;

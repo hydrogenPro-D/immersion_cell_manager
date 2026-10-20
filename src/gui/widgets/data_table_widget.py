@@ -71,6 +71,8 @@ class DataTableWidget(QTableWidget):
 
     # Comment text wrapping configuration
     COMMENT_WRAP_LENGTH = 60
+    # The stored value of a cell whose shown text was reformatted (wrapped Comments).
+    RAW_ROLE = Qt.ItemDataRole.UserRole + 1
 
     # Comments fills the leftover width but never shrinks below this (px), so it
     # stays readable even when the other columns fill the viewport.
@@ -405,11 +407,14 @@ class DataTableWidget(QTableWidget):
                 else ""
             )
 
-            # Wrap long text in Comments column
+            # Wrap long text in Comments column; keep the stored text alongside so
+            # the editor and sorting never pick up the display line breaks.
+            raw = text
             if column_name == "Comments" and len(text) > self.COMMENT_WRAP_LENGTH:
                 text = self._wrap_text(text, max_length=self.COMMENT_WRAP_LENGTH)
 
             item = QTableWidgetItem(text)
+            item.setData(self.RAW_ROLE, raw)
             item.setTextAlignment(
                 Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter
             )
@@ -452,6 +457,14 @@ class DataTableWidget(QTableWidget):
                 )
                 self.setItem(row, c, item)
             item.setBackground(tint)
+
+    def raw_text(self, row: int, col: int) -> str:
+        """A cell's stored value (not its wrapped display text)."""
+        item = self.item(row, col)
+        if item is None:
+            return ""
+        raw = item.data(self.RAW_ROLE)
+        return raw if raw is not None else item.text()
 
     def _mark_stale_calibration(self, row, data, column_names):
         """Flag the Status cell with a red '!' if this row's channel is stale."""
@@ -731,8 +744,7 @@ class DataTableWidget(QTableWidget):
         for row in range(self.rowCount()):
             row_data = []
             for col in range(self.columnCount()):
-                item = self.item(row, col)
-                row_data.append(item.text() if item else "")
+                row_data.append(self.raw_text(row, col))
             rows.append(row_data)
 
         # Sort rows using the key function on the specified column

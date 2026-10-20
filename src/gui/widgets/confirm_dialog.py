@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QGraphicsDropShadowEffect,
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor
 
 from src.gui.styles.dialog_styles import DIALOG_STYLE
@@ -32,16 +32,16 @@ _EXTRA_STYLE = """
     /* Card body, same look as EditRowDialog's #DialogBody. */
     QFrame#ConfirmBody {
         background-color: #FFFFFF;
-        border-bottom-left-radius: 12px;
-        border-bottom-right-radius: 12px;
+        border-bottom-left-radius: 6px;
+        border-bottom-right-radius: 6px;
         border: 1px solid #D8E2E8;
         border-top: none;
     }
 
     /* Gradient header banner, variant decides the palette. */
     QFrame#ConfirmHeader {
-        border-top-left-radius: 12px;
-        border-top-right-radius: 12px;
+        border-top-left-radius: 6px;
+        border-top-right-radius: 6px;
         border: none;
     }
     QFrame#ConfirmHeader[variant="primary"] {
@@ -88,7 +88,7 @@ _EXTRA_STYLE = """
     QPushButton#ConfirmGhost {
         min-width: 120px;
         padding: 10px 20px;
-        border-radius: 10px;
+        border-radius: 3px;
         font-size: 12px;
         font-weight: 600;
         letter-spacing: 0.4px;
@@ -155,6 +155,7 @@ class ConfirmDialog(QDialog):
         icon: str | None = None,
         subtitle: str | None = None,
         single: bool = False,
+        alt_text: str | None = None,
     ):
         super().__init__(parent)
         self._title = title
@@ -164,6 +165,8 @@ class ConfirmDialog(QDialog):
         self._cancel_text = cancel_text
         self._destructive = destructive
         self._single = single  # single-button acknowledgement (no Cancel)
+        self._alt_text = alt_text  # optional second action next to the confirm
+        self.choice = None  # "confirm" / "alt", None when cancelled or closed
         self._icon = icon if icon is not None else ("⚠️" if destructive else "❓")
         self._subtitle = subtitle if subtitle is not None else (
             "Please confirm, this cannot be undone." if destructive
@@ -271,6 +274,14 @@ class ConfirmDialog(QDialog):
             cancel_btn.setDefault(True)  # safer default = Cancel
             row.addWidget(cancel_btn)
 
+        if self._alt_text and not self._single:
+            alt_btn = QPushButton(self._alt_text)
+            alt_btn.setObjectName("ConfirmGhost")
+            alt_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            alt_btn.setAutoDefault(False)
+            alt_btn.clicked.connect(lambda: self._finish("alt"))
+            row.addWidget(alt_btn)
+
         confirm_btn = QPushButton(self._confirm_text)
         # A single-button acknowledgement keeps the friendly teal button even
         # under a warning (red) header.
@@ -279,11 +290,15 @@ class ConfirmDialog(QDialog):
             else "ConfirmPrimary"
         )
         confirm_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        confirm_btn.clicked.connect(self.accept)
+        confirm_btn.clicked.connect(lambda: self._finish("confirm"))
         confirm_btn.setAutoDefault(False)
         confirm_btn.setDefault(self._single)
         row.addWidget(confirm_btn)
         return row
+
+    def _finish(self, choice: str) -> None:
+        self.choice = choice
+        self.accept()
 
     # ---------------------------------------------------- Window dragging
     def mousePressEvent(self, event):
@@ -327,6 +342,50 @@ class ConfirmDialog(QDialog):
             subtitle=subtitle,
         )
         return dialog.exec() == QDialog.DialogCode.Accepted
+
+    @classmethod
+    def choose(
+        cls,
+        parent,
+        title: str,
+        message: str,
+        confirm_text: str,
+        alt_text: str,
+        informative: str = "",
+        cancel_text: str = "Cancel",
+        destructive: bool = False,
+        icon: str | None = None,
+        subtitle: str | None = None,
+    ) -> str | None:
+        """Three-way dialog: Cancel / alt / confirm.
+
+        Returns ``"confirm"`` or ``"alt"``, or ``None`` when cancelled or closed.
+        """
+        dialog = cls(
+            parent=parent,
+            title=title,
+            message=message,
+            informative=informative,
+            confirm_text=confirm_text,
+            cancel_text=cancel_text,
+            destructive=destructive,
+            icon=icon,
+            subtitle=subtitle,
+            alt_text=alt_text,
+        )
+        dialog.exec()
+        return dialog.choice
+
+    @classmethod
+    def alert_over_next_dialog(cls, fallback_parent, title: str, message: str,
+                               **kwargs) -> None:
+        """Queue an alert so it opens on top of the modal dialog about to be
+        shown (the alert fires once that dialog's event loop is running)."""
+        def show():
+            from PyQt6.QtWidgets import QApplication
+            cls.alert(QApplication.activeModalWidget() or fallback_parent,
+                      title, message, **kwargs)
+        QTimer.singleShot(0, show)
 
     @classmethod
     def alert(

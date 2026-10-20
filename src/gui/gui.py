@@ -1,33 +1,81 @@
 import sys
+from datetime import date
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QTabWidget, QMessageBox,
+    QTabBar,
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QEventLoop, QEvent, QObject, QTimer
 from src.data.db import DatabaseChangeNotifier, DatabaseError
+from src.splash import EXTRA_BREATHS
 from src.data.immersion_cells_manager import ImmersionCellsManager
 from src.data.station_summary_manager import StationSummaryManager
 from src.data.calibration_manager import CalibrationManager
 from src.data.logbook_manager import LogbookManager
+from src.data.inventory_manager import InventoryManager
+from src.data.event_log_manager import EventLogManager
 from src.data.projects_manager import invalidate_projects_cache
 from src.gui.cells_mapping import CellsMapping
 from src.gui.station_summary_gui import StationSummary
 from src.gui.calibration_gui import CalibrationTab
-from src.gui.logbook_gui import LogbookTab
+from src.gui.logbook_gui import LogbookTab, offer_logbook_entry
+from src.gui.inventory_gui import InventoryTab
+from src.gui.event_log_gui import EventLogTab
+
+
+def load_managers() -> dict:
+    """Connect and load every manager. They hold no Qt objects, so main.py runs
+    this on a worker thread while the splash pulses."""
+    inventory = InventoryManager()
+    return {
+        "cells": ImmersionCellsManager(),
+        "summary": StationSummaryManager(),
+        "calibration": CalibrationManager(),
+        "logbook": LogbookManager(),
+        "inventory": inventory,
+        "events": EventLogManager(inventory),
+    }
+
+
+# Which tab shows which icm tables (for the 5-second change check).
+_LEGACY_TABLES = {"cells", "channel_history", "projects", "channel_calibration"}
+_INVENTORY_TABLES = {"inventory_item", "inventory_config"}
+_EVENT_TABLES = {"event_type", "event_type_cost", "event_log", "event_log_cost"}
+
+
+class _TabBarWheelBlocker(QObject):
+    """Stops the mouse wheel from switching tabs (installed on each tab bar)."""
+
+    def eventFilter(self, obj, event):
+        return event.type() == QEvent.Type.Wheel and isinstance(obj, QTabBar)
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, managers: dict = None, pump=None):
+        """``managers`` comes from :func:`load_managers` (loaded here if omitted);
+        ``pump`` is called between tab builds so the splash can repaint."""
         super().__init__()
         # Create the managers once at the application level
-        self.cells_manager = ImmersionCellsManager()
-        self.summary_manager = StationSummaryManager()
-        self.calibration_manager = CalibrationManager()
-        self.logbook_manager = LogbookManager()
+        m = managers or load_managers()
+        self.cells_manager = m["cells"]
+        self.summary_manager = m["summary"]
+        self.calibration_manager = m["calibration"]
+        self.logbook_manager = m["logbook"]
+        self.inventory_manager = m["inventory"]
+        self.event_manager = m["events"]
+        self._pump = pump or (lambda: None)
+        self._wheel_blocker = _TabBarWheelBlocker(self)
         self.init_ui()
+        self._block_tab_wheel(self)
 
         # Poll the database for external changes (other users) and refresh.
+        self._pending_tables = set()  # changes held while a dialog is open
         self.change_notifier = DatabaseChangeNotifier()
         self.change_notifier.changed.connect(self._on_data_changed)
+
+    def _block_tab_wheel(self, root: QWidget) -> None:
+        # Per tab bar: an app-wide filter would run Python for every event.
+        for bar in root.findChildren(QTabBar):
+            bar.installEventFilter(self._wheel_blocker)
 
     def init_ui(self):
         self.setWindowTitle("Immersion Cell Manager")
@@ -49,7 +97,9 @@ class MainWindow(QMainWindow):
         self.station_summary_tab = StationSummary(
             self.summary_manager, self.cells_manager,
             on_cells_changed=lambda: self.cells_mapping_tab.reload_data(),
+            on_experiment_finished=self._offer_logbook_entry,
         )
+        self._pump()
 
         # Create cells_mapping_tab with a callback function to log channel usage
         def on_channel_logged(channel: str, row_data: dict):
@@ -79,7 +129,9 @@ class MainWindow(QMainWindow):
             on_project_renamed=on_project_renamed,
             on_channels_changed=on_channels_changed,
             calibration_manager=self.calibration_manager,
+            on_experiment_finished=self._offer_logbook_entry,
         )
+        self._pump()
 
         # A calibration verdict couples to the cell status: a Reject frees the
         # cell into "In repair" (comment-only); an Approve returns an In-repair
@@ -100,13 +152,25 @@ class MainWindow(QMainWindow):
         self.calibration_tab = CalibrationTab(
             self.calibration_manager, on_decision=on_calibration_decision
         )
+        self._pump()
 
-        self.logbook_tab = LogbookTab(self.logbook_manager)
+        # The logbook is the slowest tab to build, so it's built on first open.
+        self.logbook_tab = None
+
+        self.inventory_tab = InventoryTab(
+            self.inventory_manager,
+            on_items_changed=lambda: self.event_log_tab.reload())
+        # The event manager has re-read the inventory already: just redraw.
+        self.event_log_tab = EventLogTab(
+            self.event_manager, on_inventory_changed=self.inventory_tab.refresh)
 
         self.tabs.addTab(self.cells_mapping_tab, "Cells mapping")
         self.tabs.addTab(self.station_summary_tab, "Station Summary")
         self.tabs.addTab(self.calibration_tab, "Channel Calibration")
-        self.tabs.addTab(self.logbook_tab, "IC Logbook")
+        self._logbook_index = self.tabs.addTab(QWidget(), "IC Logbook")
+        self.tabs.addTab(self.inventory_tab, "Inventory")
+        self.tabs.addTab(self.event_log_tab, "Event Log")
+        self.tabs.currentChanged.connect(self._build_logbook_on_first_open)
 
 
         # Apply tab styling
@@ -117,14 +181,69 @@ class MainWindow(QMainWindow):
         # Set layout
         central_widget.setLayout(layout)
 
-    def _on_data_changed(self):
-        """Handle data changes detected in the database (possibly another user)."""
-        # Drop the cached project list so external project edits (colors,
-        # renames, additions) are reflected on the next reload/repaint.
-        invalidate_projects_cache()
-        self.cells_mapping_tab.reload_data()
-        self.station_summary_tab.reload_data()
-        self.calibration_tab.reload_data()
+    def _offer_logbook_entry(self, cell: dict, undo=None) -> None:
+        """A cell left In use: offer its experiment to the IC Logbook, prefilled
+        from the cell (the rest is asked in the form). ``undo`` puts the cell
+        back to In use; it backs the form's "Go back" button."""
+        prefill = {
+            "ic_id": cell.get("data_filename", ""),
+            "owner": cell.get("current_owner", ""),
+            "assembled_by": cell.get("assembled_by", ""),
+            "test_length_h": self.cells_manager.duration_hours(cell),
+            "experiment_finished_on": date.today().isoformat(),
+        }
+        outcome, category = offer_logbook_entry(
+            self, self.logbook_manager, prefill, cell.get("channel", ""),
+            can_go_back=undo is not None)
+        if outcome == "back":
+            undo()
+        elif outcome == "added" and self.logbook_tab is not None:
+            self.logbook_tab.show_added(category)
+
+    def _build_logbook_on_first_open(self, index: int) -> None:
+        if index != self._logbook_index or self.logbook_tab is not None:
+            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            self.logbook_tab = LogbookTab(self.logbook_manager)
+            placeholder = self.tabs.widget(index)
+            self.tabs.blockSignals(True)  # the swap below would re-enter this slot
+            self.tabs.removeTab(index)
+            self.tabs.insertTab(index, self.logbook_tab, "IC Logbook")
+            self.tabs.setCurrentIndex(index)
+            self.tabs.blockSignals(False)
+            placeholder.deleteLater()
+            self._block_tab_wheel(self.logbook_tab)
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def _on_data_changed(self, tables: set):
+        """Refresh the tabs that show ``tables`` (changed in the database,
+        usually by another user)."""
+        self._pending_tables |= tables
+        if QApplication.activeModalWidget() is not None or QApplication.activePopupWidget():
+            # Rebuilding under an open dialog would pull rows from under it.
+            QTimer.singleShot(1000, lambda: self._on_data_changed(set()))
+            return
+        tables, self._pending_tables = self._pending_tables, set()
+        if not tables:
+            return
+        if tables & _LEGACY_TABLES:
+            # Drop the cached project list so external project edits (colors,
+            # renames, additions) are reflected on the next reload/repaint.
+            invalidate_projects_cache()
+            self.cells_mapping_tab.reload_data()
+            self.station_summary_tab.reload_data()
+            self.calibration_tab.reload_data()
+        if tables & _INVENTORY_TABLES:
+            self.inventory_tab.reload()  # first: event dialogs read stock from it
+        if tables & _EVENT_TABLES:
+            self.event_log_tab.reload()
+        if any(t.startswith("ic_logbook") for t in tables):
+            if self.logbook_tab is not None:
+                self.logbook_tab.reload_data()
+            else:
+                self.logbook_manager.reload()  # read when the tab is first opened
 
     def _apply_tab_styling(self) -> None:
         """Apply modern styling to the tab widget."""
@@ -160,15 +279,39 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
 
-def run_app():
-    """Initialize and run the PyQt6 application"""
-    app = QApplication(sys.argv)
+def run_app(app=None, splash=None, managers=None, load_error=None):
+    """Build the main window and run the event loop.
+
+    main.py passes its QApplication, the startup splash, and the managers it
+    loaded in the background (or the error that loading raised). All optional,
+    so this module still runs on its own.
+    """
+    app = app or QApplication(sys.argv)
+    # Let the splash repaint between tab builds; user input waits until the
+    # window is shown.
+    pump = None
+    if splash is not None:
+        pump = lambda: app.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
     try:
-        window = MainWindow()
+        if load_error is not None:
+            raise load_error
+        window = MainWindow(managers, pump=pump)
     except DatabaseError as e:
+        if splash is not None:
+            splash.close_now()  # don't let it sit over the error dialog
         QMessageBox.critical(None, "Database error", str(e))
         sys.exit(1)
+    if splash is not None:
+        # Open on the splash's screen, so both pick the same monitor.
+        screen = splash.screen()
+        if screen is not None:
+            window.setGeometry(screen.availableGeometry())
+        # Shown but invisible until the splash's extra breath ends: the costly
+        # first show happens now, so the breath and the fade stay smooth.
+        window.setWindowOpacity(0.0)
     window.showMaximized()
+    if splash is not None:
+        splash.finish(window, extra_breaths=EXTRA_BREATHS)
     sys.exit(app.exec())
 
 

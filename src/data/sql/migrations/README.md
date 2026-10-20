@@ -36,11 +36,18 @@ append-only, so `010` is never edited again).
 | 013 | `013_add_expected_end_date.sql` | adds `expected_end_date` to `cells` + `channel_history`; updates the 4 insert/update procs |
 | 014 | `014_create_calibration_table_and_procs.sql` | `icm.channel_calibration` + `usp_calibration_insert` / `_update` / `_set_decision` / `_delete` (+ their own `EXECUTE` grants) |
 | 015 | `015_add_project_density_fe_ppm.sql` | adds `density` + `fe_ppm` to `projects`; updates `usp_project_insert` / `_update` (for auto data-filename generation) |
+| 016 | `016_add_project_is_archived.sql` | adds `is_archived` to `projects` (archive instead of delete) |
+| 017 | `017_create_ic_logbook_tables_and_procs.sql` | `icm.ic_logbook` + `icm.ic_logbook_scoreboard` + their `usp_ic_logbook_*` procs |
+| 018 | `018_create_inventory_and_events.sql` | inventory (`inventory_config`, `inventory_item`) + event log (`event_type`, `event_type_cost`, `event_log`, `event_log_cost`) + procs; seeds 4 items |
+| 019 | `019_inventory_single_quantity.sql` | `inventory_item`: one `quantity` (from `usable_count`) replaces usable / not-usable counts; updates the inventory + event cost procs |
+| 020 | `020_create_ic_logbook_projects.sql` | IC Logbook projects with their own column lists (`ic_logbook_project`, `_project_column`) + custom-column values (`ic_logbook_value`); seeds the existing projects; `usp_ic_logbook_project_create` / `usp_ic_logbook_value_set` |
+| 021 | `021_add_ic_logbook_project_archive.sql` | adds `is_archived` to `ic_logbook_project` (projects are archived, never deleted) + `usp_ic_logbook_project_set_archived` |
+| 022 | `022_ic_logbook_project_rename.sql` | `usp_ic_logbook_project_rename` (renames a project and its experiments' category in one transaction); "Summary" is reserved in create + rename |
 
 ## How to run
 
 1. Connect SSMS / Azure Data Studio to the target database (apply to **`dataloggingTest`** first, `dataloggingDev` after).
-2. Run `001` → `015` in order. Each file is safe to re-run.
+2. Run `001` → `022` in order. Each file is safe to re-run.
 3. For `003`, set a real password in `@pw` first, run, then **close without saving**.
 4. Confirm: `SELECT * FROM icm.schema_migrations ORDER BY id;`
 
