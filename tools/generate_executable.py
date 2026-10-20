@@ -25,6 +25,9 @@ DATA_FOLDER = PROJECT_ROOT / "src" / "data" / "csv"
 TEMPLATE_FILE = DATA_FOLDER / "immersion_cells_template.csv"
 DRIVER_FOLDER = PROJECT_ROOT / "driver"
 CONFIG_FOLDER = PROJECT_ROOT / "config"
+ASSETS_FOLDER = PROJECT_ROOT / "assets"
+# Ship both: the window/exe use the .ico, the splash uses the .png.
+SHIPPED_ICONS = ("app_icon.ico", "app_icon.png")
 EXECUTABLE_FOLDER = DIST_PATH / EXECUTABLE_NAME
 
 
@@ -215,6 +218,8 @@ def _bootstrap_spec() -> None:
         str(DIST_PATH),
         "--workpath",
         str(WORK_PATH),
+        "--icon",
+        str(ASSETS_FOLDER / "app_icon.ico"),
     ]
 
     for hidden_import in HIDDEN_IMPORTS:
@@ -267,6 +272,10 @@ def build_executable() -> None:
     # _internal/config in the build.
     config_dest = EXECUTABLE_FOLDER / "_internal" / "config"
     _copy_folder(CONFIG_FOLDER, config_dest)
+
+    # Copy the icons; src/splash.py resolves them as _internal/assets.
+    for name in SHIPPED_ICONS:
+        _copy_file(ASSETS_FOLDER / name, EXECUTABLE_FOLDER / "_internal" / "assets" / name)
 
     print(f"Build finished. Executable output is under: {DIST_PATH}")
     print(f"Spec file is at: {SPEC_FILE}")

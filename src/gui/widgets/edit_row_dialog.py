@@ -22,9 +22,13 @@ from PyQt6.QtWidgets import (
     QTextEdit,
     QInputDialog,
     QAbstractItemView,
+    QStyle,
+    QStyleOptionComboBox,
 )
-from PyQt6.QtCore import Qt, QDate, QTime, QEvent, pyqtSignal
-from PyQt6.QtGui import QColor, QPixmap, QIcon
+from PyQt6.QtCore import Qt, QDate, QTime, QEvent, QPointF, pyqtSignal
+from PyQt6.QtGui import QColor, QPixmap, QIcon, QMouseEvent
+
+from src.gui.widgets.data_table_widget import DataTableWidget
 
 
 # Custom QComboBox that passes wheel events to parent for scrolling
@@ -49,7 +53,7 @@ class ProjectComboBox(ScrollableComboBox):
             Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
         )
         self._arrow.setStyleSheet(
-            "background: transparent; color: #4A5A66; font-size: 13px;"
+            "background: transparent; color: #1F2A33; font-size: 18px;"
             " border: none;"
         )
         self._arrow.adjustSize()
@@ -97,20 +101,23 @@ class CalendarDateEdit(QDateEdit):
     """Date field that can only be changed through the calendar popup.
 
     The date cannot be typed or edited by clicking around inside the field.
-    A calendar icon on the right opens the popup where the user picks a date.
+    A click anywhere on the field opens the popup where the user picks a date.
     """
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._opening = False
         self.setCalendarPopup(True)
         # Hide the up/down spin arrows; the date is chosen via the calendar.
         self.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-        # Block direct editing: the embedded line edit is read-only, so the
-        # user can't type or change individual date sections by clicking.
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        # Block direct editing: the embedded line edit is read-only, and lets
+        # clicks fall through to this widget so they open the calendar.
         line_edit = self.lineEdit()
         if line_edit is not None:
             line_edit.setReadOnly(True)
-            line_edit.setCursor(Qt.CursorShape.PointingHandCursor)
+            line_edit.setAttribute(
+                Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
         # Calendar icon overlay placed on top of the real drop-down button.
         # It is transparent to mouse events, so clicks fall through to the
@@ -155,6 +162,28 @@ class CalendarDateEdit(QDateEdit):
         parent = self.parent()
         if parent is not None:
             parent.wheelEvent(event)
+
+    def mousePressEvent(self, event):
+        # Qt only opens the popup from the drop-down button, so redirect a
+        # click anywhere in the field to that button.
+        if self.isEnabled() and not self._opening:
+            self._opening = True
+            try:
+                opt = QStyleOptionComboBox()
+                opt.initFrom(self)
+                arrow = self.style().subControlRect(
+                    QStyle.ComplexControl.CC_ComboBox, opt,
+                    QStyle.SubControl.SC_ComboBoxArrow, self)
+                pos = QPointF(arrow.center())
+                gpos = QPointF(self.mapToGlobal(arrow.center()))
+                super().mousePressEvent(QMouseEvent(
+                    QEvent.Type.MouseButtonPress, pos, gpos,
+                    Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
+                    Qt.KeyboardModifier.NoModifier))
+            finally:
+                self._opening = False
+            return
+        super().mousePressEvent(event)
 
     def keyPressEvent(self, event):
         # Ignore keyboard input so arrow keys / typing can't change the date.
@@ -785,7 +814,9 @@ class EditRowDialog(QDialog):
             field = self.input_fields.get(column_name)
             if field is None:
                 continue
-            text = item.text() if item else ""
+            # The stored value, not the wrapped display text (Comments).
+            raw = item.data(DataTableWidget.RAW_ROLE) if item else None
+            text = raw if raw is not None else (item.text() if item else "")
             # Fall back to a default value when the stored cell is empty.
             if not text.strip():
                 text = self.DEFAULT_VALUES.get(column_name.strip().lower(), text)

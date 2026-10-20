@@ -27,10 +27,14 @@ from src.gui.styles.tab_styles import TAB_STYLE
 class CellsMapping(QWidget):
     def __init__(self, manager, on_channel_logged=None, on_project_removed=None,
                  on_project_renamed=None, on_channels_changed=None,
-                 calibration_manager=None):
+                 calibration_manager=None, on_experiment_finished=None):
         super().__init__()
         self.manager = manager
         self.on_channel_logged = on_channel_logged
+        # Called with the cell's last In-use values when it leaves In use, so the
+        # experiment can be offered to the IC Logbook.
+        self.on_experiment_finished = on_experiment_finished
+        self._finished_cell = None
         self.on_project_removed = on_project_removed
         self.on_project_renamed = on_project_renamed
         # Called after a channel is added/deleted, so other tabs (e.g. Channel
@@ -59,8 +63,9 @@ class CellsMapping(QWidget):
             # Clear the table
             self.table.setRowCount(0)
 
-            # Reload data
+            # Reload data; keep an active header sort (rows arrive in DB order).
             self.load_data()
+            self.table.resort_if_needed()
             self._refresh_status()
 
             # Re-apply the active search filter so a reload doesn't reveal rows
@@ -174,8 +179,10 @@ class CellsMapping(QWidget):
 
         self.remove_button = QPushButton("🗑  Remove Selected Channel")
         self.remove_button.setObjectName("DangerButton")
+        self.remove_button.setStyleSheet("QPushButton#DangerButton { padding: 10px 8px; }")
+        # Hug the text; otherwise the toolbar hands it the leftover width.
+        self.remove_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.remove_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.remove_button.setFixedWidth(220)
         self.remove_button.setEnabled(False)
         self.remove_button.clicked.connect(self._on_remove_clicked)
 
@@ -260,84 +267,90 @@ class CellsMapping(QWidget):
             calibration_failed=failed,
         )
         dialog.row_saved.connect(self._on_row_saved)
+        self._finished_cell = None
         dialog.exec()
         self._refresh_status()
+        # Offered only after the editor has closed, so the two don't stack.
+        if self._finished_cell and self.on_experiment_finished:
+            (cell, before), self._finished_cell = self._finished_cell, None
+            self.on_experiment_finished(
+                cell, lambda: self._undo_status_change(before, cell))
 
     def add_row(self, data):
         """Add a row to the table"""
         self.table.add_row(data)
         self._refresh_status()
 
-    def _on_row_saved(self, row_data: list):
-        """Callback when a row is saved from the edit dialog"""
+    def _on_row_saved(self, row_data: list) -> bool:
+        """Save an edited row: the cell, then its history episode. On failure
+        warn and show what's stored. True when everything was saved."""
+        col_names = self.manager.get_column_names()
+        row_dict = {col_names[i]: row_data[i] for i in range(min(len(col_names), len(row_data)))}
+        channel = row_dict.get("Channel", "")
         try:
+            finished = self._finished_experiment(row_data)
             self.manager.update_row_by_channel(row_data)
-
-            # Update the duration column for this row since it's calculated at runtime
-            try:
-                col_names = self.manager.get_column_names()
-                duration_col_idx = col_names.index("Duration")
-                channel_col_idx = col_names.index("Channel")
-                channel = row_data[channel_col_idx]
-
-                # Get the updated cell data from manager to recalculate duration
-                cell = self.manager.get_cell_by_channel(channel)
-                new_duration = self.manager._calculate_duration(cell)
-
-                # Find the row in the table and update the duration column
-                edited_row_idx = None
-                for row_idx in range(self.table.rowCount()):
-                    table_channel_item = self.table.item(row_idx, channel_col_idx)
-                    if table_channel_item and table_channel_item.text() == channel:
-                        duration_item = QTableWidgetItem(new_duration)
-                        duration_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter)
-                        self.table.setItem(row_idx, duration_col_idx, duration_item)
-                        edited_row_idx = row_idx
-                        break
-            except (ValueError, IndexError):
-                edited_row_idx = None
-
-            # Re-sort if a sort is currently active
-            self.table.resort_if_needed()
-
-            # Re-center all items in the edited row after sorting
-            if edited_row_idx is not None:
-                col_names = self.manager.get_column_names()
-                channel_col_idx = col_names.index("Channel")
-                for row_idx in range(self.table.rowCount()):
-                    table_channel_item = self.table.item(row_idx, channel_col_idx)
-                    if table_channel_item and table_channel_item.text() == channel:
-                        # Re-apply center alignment to all items in the row
-                        for col_idx in range(self.table.columnCount()):
-                            item = self.table.item(row_idx, col_idx)
-                            if item:
-                                item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter)
-                        # Scroll to keep it visible
-                        self.table.scrollToItem(self.table.item(row_idx, 0), 
-                                               self.table.ScrollHint.PositionAtCenter)
-                        break
-
-            # Log the channel usage via callback if available
-            if self.on_channel_logged:
-                col_names = self.manager.get_column_names()
-                # row_data might have an extra element at the end: original_data_filename
-                # Only map the columns that have column names
-                row_dict = {col_names[i]: row_data[i] for i in range(min(len(col_names), len(row_data)))}
-
-                # If there's an extra element, it's the original data filename
-                original_data_filename = ""
-                if len(row_data) > len(col_names):
-                    original_data_filename = row_data[len(col_names)]
-
-                # Pass original filename info for tracking
-                if original_data_filename:
-                    row_dict["__original_data_filename"] = original_data_filename
-
-                channel = row_dict.get("Channel", "")
-                if channel:
-                    self.on_channel_logged(channel, row_dict)
+            if self.on_channel_logged and channel:
+                # An extra trailing element is the pre-edit data filename, which
+                # lets the history find the episode after a rename.
+                if len(row_data) > len(col_names) and row_data[len(col_names)]:
+                    row_dict["__original_data_filename"] = row_data[len(col_names)]
+                self.on_channel_logged(channel, row_dict)
         except Exception as e:
-            print(f"Error saving row to JSON: {e}")
+            self._finished_cell = None
+            self._warn_not_saved(channel, e)
+            self.reload_data()
+            return False
+        self._finished_cell = finished
+        # Reload from the DB rather than trusting the editor's row index (a
+        # background reload can shift rows): refreshes Duration, keeps the sort,
+        # the search filter and the selection.
+        self.reload_data()
+        self._select_row_by_channel(channel)
+        return True
+
+    def _warn_not_saved(self, channel: str, error) -> None:
+        QMessageBox.warning(
+            self, "Not saved",
+            f"Channel {channel} could not be saved to the database. The table now "
+            f"shows what is stored.\n\n{error}")
+
+    def _finished_experiment(self, row_data: list):
+        """(values for the logbook, cell before the save) if this save takes the
+        cell out of In use into Test finished / Available, else None. Read
+        before saving: freeing the cell clears its fields."""
+        col_names = self.manager.get_column_names()
+        new = {self.manager.COLUMNS_MAPPING.get(c, c): row_data[i]
+               for i, c in enumerate(col_names) if i < len(row_data)}
+        if (new.get("status") or "").strip().lower() not in ("test finished", "available"):
+            return None
+        old = self.manager.get_cell_by_channel(new.get("channel", ""))
+        if (old.get("status") or "").strip().lower() != "in use":
+            return None
+        # Edits made in the same save win; fields the save cleared keep the old value.
+        merged = {k: (str(new.get(k) or "").strip() or v) for k, v in old.items()}
+        return merged, old
+
+    def _undo_status_change(self, before: dict, after: dict) -> None:
+        """"Go back" in the logbook prompt: restore the cell's In-use values,
+        reopen its editor and say so."""
+        channel = before.get("channel", "")
+        cols = self.manager.get_column_names()
+        row = [before.get(self.manager.COLUMNS_MAPPING.get(c, c), "") for c in cols]
+        # Original-filename slot = the name the save left on the episode, so a
+        # rename in that save is undone on the same episode (not a new one).
+        row.append(after.get("data_filename", ""))
+        if not self._on_row_saved(row):  # same path as an edit: cell + history
+            return  # it already warned; don't claim it moved back
+        ConfirmDialog.alert_over_next_dialog(
+            self, "Moved back to In use",
+            f"Channel <b>{channel}</b> was moved back to <b>In use</b>.",
+            button_text="OK", destructive=False, icon="↩️",
+            subtitle="Nothing was added to the IC Logbook.")
+        row = self._row_for_channel(channel)
+        if row != -1:
+            self._select_row_by_channel(channel)
+            self.open_edit_dialog(row)
 
     def _on_add_clicked(self):
         """Handle add button click - open dialog to add new immersion cell"""
@@ -379,7 +392,10 @@ class CellsMapping(QWidget):
             if self.on_channels_changed:
                 self.on_channels_changed()
         except Exception as e:
-            print(f"Error adding row to JSON: {e}")
+            channel = row_data[self.manager.get_column_names().index("Channel")] \
+                if "Channel" in self.manager.get_column_names() else ""
+            self._warn_not_saved(channel, e)
+            self.reload_data()
 
     # -------------------------------------------------------- Interactions
     def _apply_filter(self, text: str):
@@ -448,17 +464,23 @@ class CellsMapping(QWidget):
         item = self.table.item(row, col)
         return item.text() if item else ""
 
-    def _select_row_by_channel(self, channel: str) -> None:
-        """Select the row whose channel matches ``channel``, if one exists."""
+    def _row_for_channel(self, channel: str) -> int:
+        """Table row of ``channel``, or -1."""
         try:
             col = self.manager.get_column_names().index("Channel")
         except ValueError:
-            return
+            return -1
         for row in range(self.table.rowCount()):
             item = self.table.item(row, col)
             if item and item.text() == channel:
-                self.table.selectRow(row)
-                return
+                return row
+        return -1
+
+    def _select_row_by_channel(self, channel: str) -> None:
+        """Select the row whose channel matches ``channel``, if one exists."""
+        row = self._row_for_channel(channel)
+        if row != -1:
+            self.table.selectRow(row)
 
     def _refresh_status(self, visible_override=None):
         total = self.table.rowCount()

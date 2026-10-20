@@ -11,17 +11,18 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFrame, QLabel, QTabWidget,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QGraphicsDropShadowEffect, QScrollArea, QDialog, QLineEdit, QPushButton,
-    QMessageBox, QStyledItemDelegate, QStyleOptionViewItem, QStyle, QTextEdit,
-    QStyleOptionComboBox, QSizeGrip,
+    QMessageBox, QTextEdit, QSizeGrip, QComboBox,
 )
-from PyQt6.QtCore import Qt, QRegularExpression, QTimer, QDate, QEvent, QPointF
-from PyQt6.QtGui import QColor, QRegularExpressionValidator, QPen, QMouseEvent
+from PyQt6.QtCore import Qt, QRegularExpression, QTimer, QDate, QEvent
+from PyQt6.QtGui import QColor, QRegularExpressionValidator
 
 from src.gui.styles.tab_styles import TAB_STYLE
 from src.gui.styles.dialog_styles import DIALOG_STYLE
 from src.gui.widgets.confirm_dialog import ConfirmDialog
-from src.gui.widgets.edit_row_dialog import CalendarDateEdit
-from src.data.logbook_manager import STANDARD_COLUMNS, EXTRA_COLUMNS
+from src.gui.widgets.edit_row_dialog import CalendarDateEdit, ProjectComboBox
+from src.gui.widgets.hover_border_table import HoverBorderTable, HOVER_TABLE_STYLE
+from src.data.logbook_manager import STANDARD_COLUMNS, BUILTIN_TYPES
+from src.gui.widgets.logbook_project_dialog import ManageProjectsDialog, ProjectDialog
 
 _SUBTAB_STYLE = (
     "QTabWidget::pane { border: 1px solid #E1E8ED; top: -1px; }"
@@ -33,18 +34,11 @@ _SUBTAB_STYLE = (
     "QTabBar::tab:hover { background: #ECECEC; }"
 )
 
-_TABLE_STYLE = (
-    "QTableWidget { background:#FFFFFF; border:1px solid #E1E8ED;"
-    " border-radius:8px; gridline-color:#EEF2F5; }"
-    "QHeaderView::section { background:#E2EAEF; color:#4A5A66;"
-    " padding:6px 8px; border:none; font-weight:600; }"
-)
-
 # Secondary button. Enabled: teal-tinted with a teal border so it clearly reads
 # as active; disabled: flat, borderless grey so the state change is obvious.
 _SECONDARY_BTN = (
     "QPushButton { background:#E4F2F2; color:#1A5E5E; border:1px solid #6FBFBF;"
-    " border-radius:10px; padding:9px 20px; font-size:12px; font-weight:700;"
+    " border-radius:3px; padding:9px 20px; font-size:12px; font-weight:700;"
     " letter-spacing:0.4px; }"
     " QPushButton:hover { background:#D2EAEA; border-color:#4FB0B0; }"
     " QPushButton:disabled { background:#F1F3F5; color:#AEB6BD; border:none; }"
@@ -63,19 +57,12 @@ class _LogbookDateEdit(CalendarDateEdit):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._opening = False
         self.setObjectName("DateField")  # match the other input fields' styling
         self.setDisplayFormat("yyyy-MM-dd")
         self.setMinimumDate(self.UNSET)
         self.setSpecialValueText("not set")
         self.setDate(self.UNSET)
         self.calendarWidget().installEventFilter(self)  # open on current month
-        # Clicks land on the QDateEdit (not the inner field) so a click anywhere
-        # opens the calendar, not just the icon.
-        line_edit = self.lineEdit()
-        if line_edit is not None:
-            line_edit.setAttribute(
-                Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
     def is_set(self) -> bool:
         return self.date() != self.UNSET
@@ -89,28 +76,6 @@ class _LogbookDateEdit(CalendarDateEdit):
     def set_from_string(self, text: str) -> None:
         d = QDate.fromString((text or "")[:10], "yyyy-MM-dd")
         self.setDate(d if d.isValid() else self.UNSET)
-
-    def mousePressEvent(self, event):
-        # Open the calendar popup for a click anywhere in the field by
-        # forwarding a synthetic click onto the drop-down arrow.
-        if self.isEnabled() and not self._opening:
-            self._opening = True
-            try:
-                opt = QStyleOptionComboBox()
-                opt.initFrom(self)
-                arrow = self.style().subControlRect(
-                    QStyle.ComplexControl.CC_ComboBox, opt,
-                    QStyle.SubControl.SC_ComboBoxArrow, self)
-                pos = QPointF(arrow.center())
-                gpos = QPointF(self.mapToGlobal(arrow.center()))
-                super().mousePressEvent(QMouseEvent(
-                    QEvent.Type.MouseButtonPress, pos, gpos,
-                    Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
-                    Qt.KeyboardModifier.NoModifier))
-            finally:
-                self._opening = False
-            return
-        super().mousePressEvent(event)
 
     def eventFilter(self, obj, event):
         if (obj is self.calendarWidget()
@@ -127,104 +92,106 @@ class _LogbookDateEdit(CalendarDateEdit):
         event.ignore()
 
 
-class _RowHoverBorderDelegate(QStyledItemDelegate):
-    """Outlines whole rows with a border (no background change): a thin one on
-    the hovered row, a thicker/darker one on the selected row. No fills."""
-
-    HOVER = QColor("#3FA3A3")           # thin teal on hover
-    SELECTED = QColor("#1F6B6B")        # thicker darker teal on the selected row
-
-    def paint(self, painter, option, index):
-        selected = bool(option.state & QStyle.StateFlag.State_Selected)
-        opt = QStyleOptionViewItem(option)
-        opt.state &= ~(QStyle.StateFlag.State_MouseOver
-                       | QStyle.StateFlag.State_Selected)  # no hover / selection fill
-        super().paint(painter, opt, index)
-
-        if selected:
-            self._border(painter, option, index, self.SELECTED, 2)
-        elif getattr(self.parent(), "_hover_row", -1) == index.row():
-            self._border(painter, option, index, self.HOVER, 1)
-
-    @staticmethod
-    def _border(painter, option, index, color, width):
-        painter.save()
-        painter.setPen(QPen(color, width))
-        rect = option.rect
-        painter.drawLine(rect.left(), rect.top(), rect.right(), rect.top())
-        painter.drawLine(rect.left(), rect.bottom(), rect.right(), rect.bottom())
-        if index.column() == 0:
-            painter.drawLine(rect.left(), rect.top(), rect.left(), rect.bottom())
-        if index.column() == index.model().columnCount() - 1:
-            painter.drawLine(rect.right() - 1, rect.top(), rect.right() - 1, rect.bottom())
-        painter.restore()
+# Fields whose earlier values are offered in a dropdown (typing still allowed).
+_SUGGESTED_FIELDS = ("protocol", "format", "archived_in")
 
 
-class _HoverBorderTable(QTableWidget):
-    """Table that outlines the hovered (and, if selectable, the selected) row with
-    a border, no background fill. Selectable tables toggle: clicking the already-
-    selected row deselects it."""
+def logbook_suggestions(manager):
+    """Callable: project -> {field: values}, most recent first. A field the
+    project has no values for yet falls back to the whole logbook's."""
+    def suggest(category=None):
+        return {f: (manager.get_recent_values(f, category) if category else [])
+                or manager.get_recent_values(f)
+                for f in _SUGGESTED_FIELDS}
+    return suggest
 
-    def __init__(self, parent=None, selectable=False):
-        super().__init__(parent)
-        self._hover_row = -1
-        self._toggle_row = -1
-        self._selectable = selectable
-        self.setMouseTracking(True)
-        self.viewport().setMouseTracking(True)
-        # No per-cell hover highlight, we draw a whole-row border instead. The
-        # native style paints cell hover from the view's own hover index, so turn
-        # off WA_Hover and don't let the base mouseMove set a hovered cell.
-        self.viewport().setAttribute(Qt.WidgetAttribute.WA_Hover, False)
-        self.setItemDelegate(_RowHoverBorderDelegate(self))
-        if selectable:
-            self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-            self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        else:
-            self.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
 
-    def selected_row(self) -> int:
-        if not self._selectable:
-            return -1
-        rows = self.selectionModel().selectedRows()
-        return rows[0].row() if rows else -1
+def logbook_columns(manager):
+    """Callable: project -> [(field, label, type)] for ExperimentDialog."""
+    def columns(category):
+        types = manager.get_column_types(category)
+        return [(f, label, types.get(f, "text")) for f, label in manager.get_columns(category)]
+    return columns
 
-    def _set_hover(self, row: int) -> None:
-        if row != self._hover_row:
-            self._hover_row = row
-            self.viewport().update()
 
-    def mousePressEvent(self, event):
-        # Remember if this press landed on the already-selected row, so the
-        # release can toggle it off. Clearing here doesn't stick, the base
-        # handler re-selects the row on release.
-        self._toggle_row = -1
-        if self._selectable and event.button() == Qt.MouseButton.LeftButton:
-            idx = self.indexAt(event.position().toPoint())
-            r = idx.row() if idx.isValid() else -1
-            if r != -1 and r == self.selected_row():
-                self._toggle_row = r
-        super().mousePressEvent(event)
+def _choose_project(parent, projects: list, current: str):
+    """Ask which project to move an experiment to; the name, or None."""
+    dlg = QDialog(parent)
+    dlg.setWindowTitle("Move to other project")
+    dlg.setModal(True)
+    dlg.setMinimumWidth(440)
+    dlg.setStyleSheet(DIALOG_STYLE + "QLabel#FieldLabel { color:#000000; }")
+    lay = QVBoxLayout(dlg)
+    lay.setContentsMargins(22, 20, 22, 18)
+    lay.setSpacing(10)
+    title = QLabel("Move to other project")
+    title.setStyleSheet("font-size:16px; font-weight:700; color:#000000;")
+    lay.addWidget(title)
+    lay.addWidget(QLabel(f"Move this experiment from <b>{current}</b> to:"))
+    combo = ExperimentDialog._dropdown([p for p in projects if p != current], editable=False)
+    combo.setPlaceholderText("Choose a project")
+    combo.setCurrentIndex(-1)
+    lay.addWidget(combo)
+    buttons = QHBoxLayout()
+    buttons.addStretch(1)
+    cancel = QPushButton("Cancel")
+    cancel.setAutoDefault(False)
+    cancel.clicked.connect(dlg.reject)
+    move = QPushButton("Move")
+    move.setEnabled(False)
+    move.clicked.connect(dlg.accept)
+    combo.currentIndexChanged.connect(lambda i: move.setEnabled(i >= 0))
+    buttons.addWidget(cancel)
+    buttons.addWidget(move)
+    lay.addLayout(buttons)
+    if dlg.exec() != QDialog.DialogCode.Accepted or combo.currentIndex() < 0:
+        return None
+    return combo.currentText()
 
-    def mouseReleaseEvent(self, event):
-        # Toggle off a re-click of the selected row, after the base handler has
-        # done its own (re)selection on release.
-        super().mouseReleaseEvent(event)
-        if (self._toggle_row != -1 and event.button() == Qt.MouseButton.LeftButton
-                and self.indexAt(event.position().toPoint()).row() == self._toggle_row):
-            self.clearSelection()
-            self.viewport().update()
-        self._toggle_row = -1
 
-    def mouseMoveEvent(self, event):
-        # Track the row ourselves; intentionally do NOT chain to the base handler
-        # (it would set a per-cell hover state that the style would highlight).
-        idx = self.indexAt(event.position().toPoint())
-        self._set_hover(idx.row() if idx.isValid() else -1)
+def offer_logbook_entry(parent, manager, prefill: dict, channel: str = "",
+                        can_go_back: bool = False):
+    """Offer to add a just-finished experiment to the logbook. ``prefill`` holds
+    the fields known from Cells mapping; ``can_go_back`` adds a "Go back" button.
 
-    def leaveEvent(self, event):
-        self._set_hover(-1)
-        super().leaveEvent(event)
+    Returns (outcome, sub-tab): ("added", category), ("skipped", None) or
+    ("back", None) when the user wants the status change undone.
+    """
+    dlg = ExperimentDialog(
+        parent, values=prefill, adding=True,
+        categories=manager.get_categories(),
+        suggestions=logbook_suggestions(manager),
+        columns=logbook_columns(manager),
+        title="Add to IC Logbook",
+        intro=(f"Channel {channel} is no longer in use. Choose the project and "
+               "complete the details; fields known from Cells mapping are filled in."),
+        confirm_text="Add to logbook", cancel_text="Skip", confirm_skip=True,
+        back_text="Go back" if can_go_back else None)
+    dlg.exec()
+    if dlg.went_back:
+        return "back", None
+    if not dlg.saved:
+        return "skipped", None
+    if not manager.add_experiment(dlg.category, dlg.result_values):
+        QMessageBox.warning(parent, "Not added",
+                            "The experiment could not be added to the IC Logbook.")
+        return "skipped", None
+    return "added", dlg.category
+
+
+# Experiment id stored on each row's first cell (rows must not be found by position).
+_EXP_ID = Qt.ItemDataRole.UserRole
+
+
+def _warn_not_saved(parent) -> None:
+    QMessageBox.warning(
+        parent, "Not saved",
+        "The change could not be saved to the database (connection problem or "
+        "another user's change). The table shows what is stored now.")
+
+
+class _PendingTable(QWidget):
+    """Stand-in for a project table that is built the first time it's opened."""
 
 
 class LogbookTab(QWidget):
@@ -247,6 +214,16 @@ class LogbookTab(QWidget):
 
         # Add / Update act on whichever category tab is open (hidden on Summary).
         toolbar = QHBoxLayout()
+        self.add_project_btn = QPushButton("＋  Add project")
+        self.add_project_btn.setStyleSheet(_SECONDARY_BTN)
+        self.add_project_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.add_project_btn.clicked.connect(self._on_add_project)
+        toolbar.addWidget(self.add_project_btn)
+        self.manage_projects_btn = QPushButton("Manage projects")
+        self.manage_projects_btn.setStyleSheet(_SECONDARY_BTN)
+        self.manage_projects_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.manage_projects_btn.clicked.connect(self._on_manage_projects)
+        toolbar.addWidget(self.manage_projects_btn)
         toolbar.addStretch(1)
         self.update_btn = QPushButton("Update")
         self.update_btn.setStyleSheet(_SECONDARY_BTN)
@@ -257,6 +234,11 @@ class LogbookTab(QWidget):
         self.add_btn.setObjectName("PrimaryButton")
         self.add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.add_btn.clicked.connect(self._on_add_clicked)
+        # Keep their space when hidden so the sub-tab bar doesn't jump on Summary.
+        for btn in (self.update_btn, self.add_btn):
+            policy = btn.sizePolicy()
+            policy.setRetainSizeWhenHidden(True)
+            btn.setSizePolicy(policy)
         toolbar.addWidget(self.update_btn)
         toolbar.addWidget(self.add_btn)
         root.addLayout(toolbar)
@@ -264,7 +246,7 @@ class LogbookTab(QWidget):
         self.sub_tabs = QTabWidget()
         self.sub_tabs.setStyleSheet(_SUBTAB_STYLE)
         self.sub_tabs.setUsesScrollButtons(True)
-        self.sub_tabs.currentChanged.connect(lambda *_a: self._sync_toolbar())
+        self.sub_tabs.currentChanged.connect(self._on_sub_tab_changed)
         self._populate_sub_tabs()
         root.addWidget(self.sub_tabs, 1)
         self._sync_toolbar()
@@ -290,20 +272,42 @@ class LogbookTab(QWidget):
         return header
 
     def _populate_sub_tabs(self) -> None:
+        # Project tables are built on first open: all ~1,900 rows up front made
+        # the first click on the IC Logbook lag (~0.7 s).
+        self.sub_tabs.blockSignals(True)
         self.sub_tabs.clear()
         self.sub_tabs.addTab(self._build_summary(), "Summary")
         for category in self.manager.get_categories():
-            self.sub_tabs.addTab(self._build_category(category), category)
+            self.sub_tabs.addTab(_PendingTable(), category)
+        self.sub_tabs.blockSignals(False)
+        self._on_sub_tab_changed(self.sub_tabs.currentIndex())
+
+    def _on_sub_tab_changed(self, index: int) -> None:
+        if isinstance(self.sub_tabs.widget(index), _PendingTable):
+            self._swap_tab(index, self._build_category(self.sub_tabs.tabText(index)))
+        self._sync_toolbar()
+
+    def _swap_tab(self, index: int, widget: QWidget) -> None:
+        """Replace the widget of tab ``index``, keeping the open tab."""
+        old, text, current = self.sub_tabs.widget(index), self.sub_tabs.tabText(index), \
+            self.sub_tabs.currentIndex()
+        self.sub_tabs.blockSignals(True)  # the swap would re-enter the change slot
+        self.sub_tabs.removeTab(index)
+        self.sub_tabs.insertTab(index, widget, text)
+        self.sub_tabs.setCurrentIndex(current)
+        self.sub_tabs.blockSignals(False)
+        old.deleteLater()
 
     # --------------------------------------------------------- Category tab
     def _make_table(self, selectable: bool = False) -> QTableWidget:
-        table = _HoverBorderTable(selectable=selectable)
+        table = HoverBorderTable(selectable=selectable)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setAlternatingRowColors(True)
         table.setWordWrap(True)
         table.setShowGrid(False)
         table.verticalHeader().setVisible(False)
-        table.setStyleSheet(_TABLE_STYLE)
+        table.setStyleSheet(HOVER_TABLE_STYLE)
+        table.horizontalHeader().setFixedHeight(44)
         return table
 
     def _build_category(self, category: str) -> QWidget:
@@ -319,9 +323,13 @@ class LogbookTab(QWidget):
             num = QTableWidgetItem(str(r + 1))
             num.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             num.setForeground(QColor("#8A97A0"))
+            num.setData(_EXP_ID, exp.get("id"))  # edits find the row by id, not position
             table.setItem(r, 0, num)
             for c, (field, _) in enumerate(cols):
-                item = QTableWidgetItem((exp.get(field) or "").strip())
+                text = (exp.get(field) or "").strip()
+                if field == "ic_id":
+                    text = " ".join(text.split())  # IC_ID stays on one line
+                item = QTableWidgetItem(text)
                 item.setTextAlignment(
                     Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
                 )
@@ -347,10 +355,17 @@ class LogbookTab(QWidget):
         for c in range(table.columnCount()):
             if table.columnWidth(c) > 420:
                 table.setColumnWidth(c, 420)
+        # IC_ID is exempt from the cap: always wide enough for the longest ID.
+        for c, (field, _) in enumerate(cols):
+            if field == "ic_id":
+                fm = table.fontMetrics()
+                longest = max((fm.horizontalAdvance(table.item(r, c + 1).text())
+                               for r in range(table.rowCount())), default=0)
+                table.setColumnWidth(c + 1, max(240, longest + 28))
         table.resizeRowsToContents()
         # Double-click a row to edit it; selection drives the global Update button.
         table.doubleClicked.connect(
-            lambda idx, c=category: self._edit_experiment(c, idx.row()))
+            lambda idx, c=category, t=table: self._edit_experiment(c, t, idx.row()))
         table.selectionModel().selectionChanged.connect(
             lambda *_a: self._sync_toolbar())
         # Start scrolled to the newest (bottom) rows.
@@ -361,7 +376,7 @@ class LogbookTab(QWidget):
     def _current_category(self):
         """(category, table) for the open category tab, or (None, None)."""
         w = self.sub_tabs.currentWidget()
-        if isinstance(w, _HoverBorderTable) and getattr(w, "_selectable", False):
+        if isinstance(w, HoverBorderTable) and getattr(w, "_selectable", False):
             return self.sub_tabs.tabText(self.sub_tabs.currentIndex()), w
         return None, None
 
@@ -381,42 +396,104 @@ class LogbookTab(QWidget):
     def _on_update_clicked(self):
         category, table = self._current_category()
         if category is not None and table.selected_row() != -1:
-            self._edit_experiment(category, table.selected_row())
+            self._edit_experiment(category, table, table.selected_row())
 
     # ------------------------------------------------------ Experiment edits
     def _refresh_category(self, category: str) -> None:
         """Reload from the DB and rebuild the Summary + this category tab."""
-        self.manager.reload()
-        self.sub_tabs.removeTab(0)
-        self.sub_tabs.insertTab(0, self._build_summary(), "Summary")
-        for i in range(self.sub_tabs.count()):
-            if self.sub_tabs.tabText(i) == category:
-                self.sub_tabs.removeTab(i)
-                self.sub_tabs.insertTab(i, self._build_category(category), category)
-                self.sub_tabs.setCurrentIndex(i)
-                break
-        self._sync_toolbar()
+        self._refresh_categories([category], select=category)
 
-    def _add_experiment(self, category: str) -> None:
-        dlg = ExperimentDialog(self, category=category, values={}, adding=True)
+    def _refresh_categories(self, categories: list, select: str) -> None:
+        """Rebuild the Summary and these category tabs (adding any that are new,
+        e.g. a just-created project), then open ``select``. The manager has
+        already re-read the data (every write does)."""
+        self._swap_tab(0, self._build_summary())
+        for category in categories:
+            index = next((i for i in range(self.sub_tabs.count())
+                          if self.sub_tabs.tabText(i) == category), None)
+            if index is None:
+                self.sub_tabs.addTab(_PendingTable(), category)
+            elif not isinstance(self.sub_tabs.widget(index), _PendingTable):
+                # Built before: rebuild. Unopened ones read fresh data when opened.
+                self._swap_tab(index, self._build_category(category))
+        self.sub_tabs.blockSignals(True)
+        for i in range(self.sub_tabs.count()):
+            if self.sub_tabs.tabText(i) == select:
+                self.sub_tabs.setCurrentIndex(i)
+        self.sub_tabs.blockSignals(False)
+        self._on_sub_tab_changed(self.sub_tabs.currentIndex())
+
+    def _on_manage_projects(self) -> None:
+        if not self.manager.can_archive():
+            QMessageBox.information(
+                self, "Not available yet",
+                "Archiving projects needs database migration 021. Please run it first.")
+            return
+        dlg = ManageProjectsDialog(self, self.manager)
         dlg.exec()
         if dlg.saved:
-            self.manager.add_experiment(category, dlg.result_values)
+            # Archived projects lose their tab; stay on the open one if still active.
+            current = self.sub_tabs.tabText(self.sub_tabs.currentIndex())
+            self._populate_sub_tabs()
+            for i in range(self.sub_tabs.count()):
+                if self.sub_tabs.tabText(i) == current:
+                    self.sub_tabs.setCurrentIndex(i)
+            self._sync_toolbar()
+
+    def _on_add_project(self) -> None:
+        if not self.manager.has_projects():
+            QMessageBox.information(
+                self, "Not available yet",
+                "Adding projects needs database migration 020. Please run it first.")
+            return
+        dlg = ProjectDialog(self, self.manager)
+        dlg.exec()
+        if dlg.created:
+            self._refresh_categories([dlg.created], select=dlg.created)
+
+    def show_added(self, category: str) -> None:
+        """Refresh after an entry was added from outside (Cells mapping)."""
+        self._refresh_category(category)
+
+    def _add_experiment(self, category: str) -> None:
+        dlg = ExperimentDialog(self, category=category, values={}, adding=True,
+                               suggestions=logbook_suggestions(self.manager),
+                               columns=logbook_columns(self.manager))
+        dlg.exec()
+        if dlg.saved:
+            if not self.manager.add_experiment(category, dlg.result_values):
+                _warn_not_saved(self)
             self._refresh_category(category)
 
-    def _edit_experiment(self, category: str, row: int) -> None:
-        rows = self.manager.get_experiments(category)
-        if not (0 <= row < len(rows)):
+    def _edit_experiment(self, category: str, table, row: int) -> None:
+        item = table.item(row, 0)
+        exp = self.manager.get_experiment(item.data(_EXP_ID) if item else None)
+        if exp is None:
+            QMessageBox.information(
+                self, "Experiment not found",
+                "This experiment no longer exists (another user may have changed "
+                "it). The table has been refreshed.")
+            self.manager.reload()
+            self._refresh_category(category)
             return
-        exp = rows[row]
-        dlg = ExperimentDialog(self, category=category, values=exp, adding=False)
+        dlg = ExperimentDialog(self, category=category, values=exp, adding=False,
+                               suggestions=logbook_suggestions(self.manager),
+                               columns=logbook_columns(self.manager),
+                               move_targets=self.manager.get_categories())
         dlg.exec()
-        if dlg.deleted:
-            self.manager.delete_experiment(exp.get("id"))
+        if dlg.moved_to:
+            ok = self.manager.move_experiment(exp.get("id"), dlg.moved_to, dlg.result_values)
+            self._refresh_categories([category, dlg.moved_to], select=dlg.moved_to)
+        elif dlg.deleted:
+            ok = self.manager.delete_experiment(exp.get("id"))
             self._refresh_category(category)
         elif dlg.saved:
-            self.manager.update_experiment(exp.get("id"), dlg.result_values)
+            ok = self.manager.update_experiment(exp.get("id"), dlg.result_values)
             self._refresh_category(category)
+        else:
+            return
+        if not ok:
+            _warn_not_saved(self)
 
     # ---------------------------------------------------------- Summary tab
     def _build_summary(self) -> QWidget:
@@ -440,7 +517,8 @@ class LogbookTab(QWidget):
         chips.addStretch(1)
         layout.addLayout(chips)
 
-        # Per-category breakdown.
+        # Per-category breakdown, active projects first.
+        layout.addWidget(self._section_label("Active projects"))
         cat_table = self._make_table()
         cat_table.setColumnCount(3)
         cat_table.setHorizontalHeaderLabels(
@@ -456,6 +534,25 @@ class LogbookTab(QWidget):
         cat_table.resizeRowsToContents()
         cat_table.setMinimumHeight(min(60 + 30 * len(per), 640))
         layout.addWidget(cat_table)
+
+        # Archived projects: their history, apart from the active ones.
+        archived = data.get("per_category_archived") or []
+        if archived:
+            layout.addWidget(self._section_label("Archived projects"))
+            arch_table = self._make_table()
+            arch_table.setColumnCount(3)
+            arch_table.setHorizontalHeaderLabels(
+                ["Category", "Number of ICs", "Total testing time [h]"])
+            arch_table.setRowCount(len(archived))
+            for r, row in enumerate(archived):
+                arch_table.setItem(r, 0, QTableWidgetItem(row["category"]))
+                self._num_cell(arch_table, r, 1, f"{row['count']:,}")
+                self._num_cell(arch_table, r, 2, f"{row['hours']:,.1f}")
+            arch_table.horizontalHeader().setSectionResizeMode(
+                QHeaderView.ResizeMode.Stretch)
+            arch_table.resizeRowsToContents()
+            arch_table.setMinimumHeight(min(60 + 30 * len(archived), 400))
+            layout.addWidget(arch_table)
 
         # Scoreboard (manual historical snapshots), double-click a row to edit
         # or delete it; "Add snapshot" (above-right) appends one dated today.
@@ -497,9 +594,7 @@ class LogbookTab(QWidget):
     # --------------------------------------------------- Scoreboard editing
     def _refresh_summary(self) -> None:
         """Rebuild only the Summary sub-tab (after a scoreboard change)."""
-        self.sub_tabs.removeTab(0)
-        self.sub_tabs.insertTab(0, self._build_summary(), "Summary")
-        self.sub_tabs.setCurrentIndex(0)
+        self._swap_tab(0, self._build_summary())
 
     def _edit_scoreboard(self, row: int) -> None:
         rows = self.manager.get_scoreboard()
@@ -514,18 +609,23 @@ class LogbookTab(QWidget):
         )
         dlg.exec()
         if dlg.deleted:
-            self.manager.delete_scoreboard(row)
-            self._refresh_summary()
+            ok = self.manager.delete_scoreboard(row)
         elif dlg.saved:
-            self.manager.update_scoreboard(row, dlg.result_time, dlg.result_ics)
-            self._refresh_summary()
+            ok = self.manager.update_scoreboard(row, dlg.result_time, dlg.result_ics)
+        else:
+            return
+        self._refresh_summary()
+        if not ok:
+            _warn_not_saved(self)
 
     def _add_scoreboard(self) -> None:
         dlg = ScoreboardDialog(self, adding=True)
         dlg.exec()
         if dlg.saved:
-            self.manager.add_scoreboard(dlg.result_time, dlg.result_ics)
+            ok = self.manager.add_scoreboard(dlg.result_time, dlg.result_ics)
             self._refresh_summary()
+            if not ok:
+                _warn_not_saved(self)
 
     @staticmethod
     def _num_cell(table, row, col, text) -> None:
@@ -538,15 +638,15 @@ class LogbookTab(QWidget):
         chip = QFrame()
         chip.setStyleSheet(
             "QFrame { background:#F0F6F6; border:1px solid #D8E7E7;"
-            " border-radius:10px; }")
+            " border-radius:0px; }")
         lay = QVBoxLayout(chip)
         lay.setContentsMargins(16, 10, 16, 10)
         lay.setSpacing(2)
         v = QLabel(value)
-        v.setStyleSheet("font-size:18px; font-weight:700; color:#256; border:none;"
+        v.setStyleSheet("font-size:18px; font-weight:700; color:#000000; border:none;"
                         " background:transparent;")
         k = QLabel(label)
-        k.setStyleSheet("font-size:11px; color:#6B7A85; border:none;"
+        k.setStyleSheet("font-size:11px; color:#000000; border:none;"
                         " background:transparent;")
         lay.addWidget(v)
         lay.addWidget(k)
@@ -560,9 +660,26 @@ class LogbookTab(QWidget):
 
     # --------------------------------------------------------------- Data
     def reload_data(self) -> None:
-        """Re-read the source and rebuild the sub-tabs."""
+        """Re-read the database (another user changed it) and rebuild what is
+        built, keeping the open tab."""
         self.manager.reload()
-        self._populate_sub_tabs()
+        self.refresh()
+
+    def refresh(self) -> None:
+        current = self.sub_tabs.tabText(self.sub_tabs.currentIndex())
+        tabs = [self.sub_tabs.tabText(i) for i in range(1, self.sub_tabs.count())]
+        if tabs != self.manager.get_categories():
+            self._populate_sub_tabs()  # projects added, renamed or archived
+            for i in range(self.sub_tabs.count()):
+                if self.sub_tabs.tabText(i) == current:
+                    self.sub_tabs.setCurrentIndex(i)
+            self._sync_toolbar()
+            return
+        self._swap_tab(0, self._build_summary())
+        for i, category in enumerate(tabs, start=1):
+            if not isinstance(self.sub_tabs.widget(i), _PendingTable):
+                self._swap_tab(i, self._build_category(category))
+        self._sync_toolbar()
 
 
 class ScoreboardDialog(QDialog):
@@ -736,37 +853,81 @@ class ScoreboardDialog(QDialog):
 
 
 class ExperimentDialog(QDialog):
-    """Add / edit a logbook experiment (Delete lives inside, in edit mode).
+    """Add / edit a logbook experiment (Delete and Move live inside, in edit mode).
 
-    Fields come from the manager's column definitions; the Sulfidized synthesis
-    extras are shown only for that category. Card-styled, scrollable, no header.
+    Fields follow the project's columns (``columns``: callable project ->
+    [(field, label, type)]), rebuilt when a different project is picked.
+    Card-styled, scrollable, no header.
     """
 
-    _NUMERIC = {"test_length_h", "synthesis_time_h", "synthesis_temperature_c"}
     _MULTILINE = {"notes"}
-    _DATE = {"experiment_finished_on"}
     _DELETE_STYLE = (
         "QPushButton{background:#F3D9D6;color:#9A2A1E;border:1px solid #E7C6C1;"
         "border-radius:8px;padding:8px 16px;font-weight:600;}"
         " QPushButton:hover{background:#E9C4C0;}"
     )
 
-    def __init__(self, parent=None, *, category="", values=None, adding=False):
+    def __init__(self, parent=None, *, category="", values=None, adding=False,
+                 categories=None, suggestions=None, title=None, intro="",
+                 confirm_text="Save", cancel_text="Cancel", confirm_skip=False,
+                 back_text=None, columns=None, move_targets=None):
+        """``categories``: show a required Project (sub-tab) picker (starts empty) instead
+        of a fixed ``category``. ``suggestions``: callable project ->
+        {field: [values]}; those fields become dropdowns that still accept
+        typing, refilled whenever the project changes. ``move_targets``: other
+        projects, shows "Move to other project" (edit mode)."""
         super().__init__(parent)
         self.category = category
         self.adding = adding
-        self._values = values or {}
+        self._values = dict(values or {})  # also caches typed values across rebuilds
+        self._columns = columns
+        self._move_targets = move_targets or []
+        self.moved_to = None
+        self._categories = categories
+        self._suggest = suggestions
+        self._suggestions = suggestions(category or None) if suggestions else {}
+        self._title = title
+        self._intro = intro
+        self._confirm_text = confirm_text
+        self._cancel_text = cancel_text
+        self._confirm_skip = confirm_skip  # ask before Skip / Escape / close
+        self._back_text = back_text  # optional extra button that undoes the change
+        self.went_back = False
         self.saved = False
         self.deleted = False
         self.result_values = None
         self._editors = {}
+        self._labels = {}
+        self._types = {}
         self._build()
 
     def _fields(self):
-        cols = list(STANDARD_COLUMNS)
-        if self.category == "Sulfidized":
-            cols += list(EXTRA_COLUMNS)
-        return cols
+        """[(field, label, type)] for the current project (the standard columns
+        until one is picked)."""
+        if self._columns and self.category:
+            return self._columns(self.category)
+        return [(f, label, BUILTIN_TYPES.get(f, "text")) for f, label in STANDARD_COLUMNS]
+
+    def _on_category_chosen(self, text: str) -> None:
+        self._values.update(self._collect())  # keep what was typed so far
+        self.category = text
+        self._build_fields()
+        self._refill_suggestions()
+
+    def _refill_suggestions(self) -> None:
+        """Offer the chosen project's earlier values; keep whatever was typed."""
+        if not self._suggest:
+            return
+        for field, values in self._suggest(self.category or None).items():
+            combo = self._editors.get(field)
+            if not isinstance(combo, QComboBox):
+                continue
+            text = combo.currentText()
+            combo.clear()
+            combo.addItems(values)
+            combo.setCurrentIndex(-1)
+            combo.setEditText(text)
+            self._fit_popup(combo)
 
     def _build(self):
         self.setWindowTitle("Experiment")
@@ -778,6 +939,9 @@ class ExperimentDialog(QDialog):
         self.setStyleSheet(DIALOG_STYLE + (
             "QFrame#DialogBody { border-top-left-radius: 6px;"
             " border-top-right-radius: 6px; border-top: 1px solid #D8E2E8; }"
+            # Squarer inputs than the shared 5 px.
+            "QLineEdit, QTextEdit#CommentsField, QComboBox#ProjectField,"
+            " QDateEdit#DateField { border-radius: 2px; }"
         ))
         outer = QVBoxLayout(self)
         outer.setContentsMargins(20, 20, 20, 20)
@@ -822,62 +986,56 @@ class ExperimentDialog(QDialog):
         bl.setContentsMargins(24, 20, 24, 18)
         bl.setSpacing(12)
 
-        title = QLabel(("Add" if self.adding else "Edit")
-                       + f" experiment, {self.category}")
+        title = QLabel(self._title or (("Add" if self.adding else "Edit")
+                                       + f" experiment, {self.category}"))
         title.setStyleSheet("font-size:16px; font-weight:700; color:#1F2A33;"
                             " background:transparent;")
         bl.addWidget(title)
+        if self._intro:
+            intro = QLabel(self._intro)
+            intro.setWordWrap(True)
+            intro.setStyleSheet("font-size:12px; color:#000000; background:transparent;")
+            bl.addWidget(intro)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         content = QWidget()
         form = QVBoxLayout(content)
         form.setContentsMargins(0, 0, 8, 0)
         form.setSpacing(8)
 
-        num_validator = QRegularExpressionValidator(
-            QRegularExpression(r"^\d*[.,]?\d*$"), self)
-        for field, header in self._fields():
-            row = QHBoxLayout()
-            row.setSpacing(12)
-            lab = QLabel(header)
-            lab.setObjectName("FieldLabel")
-            lab.setFixedWidth(160)
-            val = self._values.get(field, "") or ""
-            multiline = field in self._MULTILINE
-            if multiline:
-                w = QTextEdit()
-                w.setObjectName("CommentsField")
-                w.setPlainText(str(val))
-                w.setMinimumHeight(70)
-                w.setTabChangesFocus(True)
-            elif field in self._DATE:
-                w = _LogbookDateEdit()
-                w.set_from_string(str(val))
-            else:
-                w = QLineEdit(str(val))
-                if field in self._NUMERIC:
-                    w.setValidator(num_validator)
-            # Center the label against its field so descenders aren't clipped even
-            # with a tight row gap; multiline (Notes) keeps its label at the top.
-            valign = (Qt.AlignmentFlag.AlignTop if multiline
-                      else Qt.AlignmentFlag.AlignVCenter)
-            lab.setAlignment(Qt.AlignmentFlag.AlignLeft | valign)
-            self._editors[field] = w
-            row.addWidget(lab, 0, valign)
-            row.addWidget(w, 1)
-            form.addLayout(row)
+        if self._categories is not None:
+            self.category_combo = self._dropdown(self._categories, editable=False)
+            self.category_combo.setPlaceholderText("Choose a project")
+            self.category_combo.setCurrentIndex(-1)
+            self.category_combo.currentTextChanged.connect(self._on_category_chosen)
+            # The key choice in this form: thicker teal border, bold label.
+            # Padding is 1 px less so the field keeps the same height.
+            self.category_combo.setStyleSheet(
+                "QComboBox#ProjectField { border:2px solid #3FA3A3; background:#FFFFFF;"
+                " padding:7px 11px; padding-right:33px; font-weight:600; }")
+            project_row = self._form_row("Project", self.category_combo)
+            project_row.findChild(QLabel, "FieldLabel").setStyleSheet(
+                "font-weight:700; color:#000000;")
+            form.addWidget(project_row)
+
+        self._fields_box = QVBoxLayout()
+        self._fields_box.setContentsMargins(0, 0, 0, 0)
+        self._fields_box.setSpacing(8)
+        form.addLayout(self._fields_box)
+        self._build_fields()
 
         form.addStretch(1)
         scroll.setWidget(content)
         bl.addWidget(scroll, 1)
 
-        cancel = QPushButton("Cancel")
+        cancel = QPushButton(self._cancel_text)
         cancel.setCursor(Qt.CursorShape.PointingHandCursor)
         cancel.setAutoDefault(False)
         cancel.clicked.connect(self.reject)
-        save = QPushButton("Save")
+        save = QPushButton(self._confirm_text)
         save.setDefault(True)
         save.setCursor(Qt.CursorShape.PointingHandCursor)
         save.clicked.connect(self._on_save)
@@ -887,6 +1045,12 @@ class ExperimentDialog(QDialog):
         buttons = QHBoxLayout()
         buttons.setSpacing(10)
         buttons.addStretch(1)
+        if not self.adding and self._move_targets:
+            move = QPushButton("Move to other project")
+            move.setCursor(Qt.CursorShape.PointingHandCursor)
+            move.setAutoDefault(False)
+            move.clicked.connect(self._on_move)
+            buttons.addWidget(move)
         if not self.adding:
             delete = QPushButton("Delete")
             delete.setStyleSheet(self._DELETE_STYLE)
@@ -894,10 +1058,114 @@ class ExperimentDialog(QDialog):
             delete.setAutoDefault(False)
             delete.clicked.connect(self._on_delete)
             buttons.addWidget(delete)
+        if self._back_text:
+            back = QPushButton(self._back_text)
+            back.setCursor(Qt.CursorShape.PointingHandCursor)
+            back.setAutoDefault(False)
+            back.clicked.connect(self._on_back)
+            buttons.addWidget(back)
         buttons.addWidget(cancel)
         buttons.addWidget(save)
         bl.addLayout(buttons)
         return body
+
+    def _build_fields(self) -> None:
+        """(Re)build the field rows for the current project's columns."""
+        while self._fields_box.count():
+            item = self._fields_box.takeAt(0)
+            if item.widget():
+                item.widget().hide()
+                item.widget().deleteLater()
+        self._editors, self._labels, self._types = {}, {}, {}
+        num_validator = QRegularExpressionValidator(
+            QRegularExpression(r"^-?\d*[.,]?\d*$"), self)
+        for field, label, ftype in self._fields():
+            val = str(self._values.get(field, "") or "")
+            multiline = field in self._MULTILINE
+            if multiline:
+                w = QTextEdit()
+                w.setObjectName("CommentsField")
+                w.setPlainText(val)
+                w.setMinimumHeight(70)
+                w.setTabChangesFocus(True)
+            elif ftype == "date":
+                w = _LogbookDateEdit()
+                w.set_from_string(val)
+            elif field in self._suggestions:
+                w = self._dropdown(self._suggestions[field], editable=True)
+                w.setCurrentIndex(-1)
+                w.setEditText(val)
+            else:
+                w = QLineEdit(val)
+                if ftype == "number":
+                    w.setValidator(num_validator)
+            self._editors[field] = w
+            self._labels[field] = label
+            self._types[field] = ftype
+            self._fields_box.addWidget(self._form_row(label, w, top=multiline))
+
+    def _on_move(self):
+        target = _choose_project(self, self._move_targets, self.category)
+        if not target:
+            return
+        vals = self._validated()
+        if vals is None:
+            return
+        self.result_values = vals
+        self.moved_to = target
+        self.saved = True
+        self.accept()
+
+    def _on_back(self):
+        self.went_back = True
+        QDialog.reject(self)  # not self.reject(): that asks about skipping
+
+    @staticmethod
+    def _form_row(label: str, widget: QWidget, top: bool = False) -> QWidget:
+        row = QWidget()
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(12)
+        lab = QLabel(label)
+        lab.setObjectName("FieldLabel")
+        lab.setFixedWidth(160)
+        # Center the label against its field so descenders aren't clipped even
+        # with a tight row gap; multiline (Notes) keeps its label at the top.
+        valign = Qt.AlignmentFlag.AlignTop if top else Qt.AlignmentFlag.AlignVCenter
+        lab.setAlignment(Qt.AlignmentFlag.AlignLeft | valign)
+        lay.addWidget(lab, 0, valign)
+        lay.addWidget(widget, 1)
+        return row
+
+    @staticmethod
+    def _dropdown(values: list, editable: bool) -> QComboBox:
+        combo = ProjectComboBox()  # combo with a visible arrow
+        combo.setObjectName("ProjectField")
+        combo.setCursor(Qt.CursorShape.PointingHandCursor)
+        combo.addItems(values)
+        # Don't widen to the longest entry (some are ~100 chars): that pushed the
+        # form wider than the window and hid the arrows. The open list still
+        # gets room to show long values.
+        combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        combo.setMinimumContentsLength(12)
+        ExperimentDialog._fit_popup(combo)
+        if editable:
+            combo.setEditable(True)
+            combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+            # The shared style shrinks the drop-down button to 0 px (the arrow is
+            # an overlay). An editable combo only opens from that button, so give
+            # it back a hit area under the arrow; the text part stays typeable.
+            combo.setStyleSheet(
+                "QComboBox#ProjectField::drop-down { width: 34px; border: none; }")
+            # The dialog's QLineEdit style would draw a second box inside the combo.
+            combo.lineEdit().setStyleSheet(
+                "background:transparent; border:none; padding:0px;")
+        return combo
+
+    @staticmethod
+    def _fit_popup(combo: QComboBox) -> None:
+        combo.view().setMinimumWidth(min(combo.view().sizeHintForColumn(0) + 30, 760))
 
     def _collect(self) -> dict:
         vals = {"category": self.category}
@@ -906,36 +1174,58 @@ class ExperimentDialog(QDialog):
                 vals[field] = w.date_string()
             elif isinstance(w, QTextEdit):
                 vals[field] = w.toPlainText().strip()
+            elif isinstance(w, QComboBox):
+                vals[field] = w.currentText().strip()
             else:
                 vals[field] = w.text().strip()
         return vals
 
-    def _on_save(self):
+    def _validated(self):
+        """The form's values, or None (after a warning) if something is off."""
+        if self._categories is not None and not self.category:
+            QMessageBox.warning(self, "Project required",
+                                "Please choose the project to add it to.")
+            return None
         vals = self._collect()
         if not vals.get("ic_id", "").strip():
             QMessageBox.warning(self, "IC_ID required",
                                 "IC_ID is mandatory, please enter one before saving.")
-            return
-        for f in self._NUMERIC:
+            return None
+        for f, ftype in self._types.items():
             v = vals.get(f, "")
-            if v:
+            if v and ftype == "number":
                 try:
                     float(v.replace(",", "."))
                 except ValueError:
                     QMessageBox.warning(self, "Invalid number",
-                                        f"'{f}' must be a number or empty.")
-                    return
-        d = vals.get("experiment_finished_on", "")
-        if d:
-            try:
-                datetime.strptime(d[:10], "%Y-%m-%d")
-            except ValueError:
-                QMessageBox.warning(self, "Invalid date",
-                                    "Experiment finished on must be YYYY-MM-DD or empty.")
-                return
+                                        f"'{self._labels[f]}' must be a number or empty.")
+                    return None
+            elif v and ftype == "date":
+                try:
+                    datetime.strptime(v[:10], "%Y-%m-%d")
+                except ValueError:
+                    QMessageBox.warning(self, "Invalid date",
+                                        f"'{self._labels[f]}' must be YYYY-MM-DD or empty.")
+                    return None
+        return vals
+
+    def _on_save(self):
+        vals = self._validated()
+        if vals is None:
+            return
         self.result_values = vals
         self.saved = True
         self.accept()
+
+    def reject(self):
+        # Skip, Escape and closing all land here; make skipping a deliberate choice.
+        if self._confirm_skip and not ConfirmDialog.ask(
+                self, title="Skip the IC Logbook?",
+                message="This experiment will <b>not</b> be added to the IC Logbook.",
+                informative="It can only be added later by hand.",
+                confirm_text="Yes, skip", cancel_text="Keep editing", destructive=True):
+            return
+        super().reject()
 
     def _on_delete(self):
         if ConfirmDialog.ask(

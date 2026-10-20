@@ -5,11 +5,12 @@ Two things live here (migration 018 tables):
 * **Event types** (`event_type` + `event_type_cost`) - reusable definitions with a
   default cost recipe ("this event consumes N of item X").
 * **Logged events** (`event_log` + `event_log_cost`) - occurrences. Logging copies
-  the recipe into a snapshot, resolving each item's default-deduct status, and
-  deducts it from the shared inventory (clamped at 0). Deleting can restore it.
+  the recipe into a snapshot and deducts it from each item's stock quantity
+  (clamped at 0). Deleting can restore it.
 
-Deductions/restores go through :class:`InventoryManager`, which owns the inventory
-procs, so both tabs stay in sync.
+Deduction and restore happen inside the event procs (``usp_event_log_cost_insert``
+/ ``_restore``), each in one transaction; the shared :class:`InventoryManager` is
+reloaded afterwards so both tabs stay in sync.
 """
 
 from src.data.db import get_db, DatabaseError, to_text, to_param
@@ -84,73 +85,64 @@ class EventLogManager:
         return list(self._logs)
 
     def resolve_costs(self, costs: list) -> list:
-        """Turn recipe/log cost lines into displayable lines, resolving each
-        item's default-deduct bucket and its current available count.
+        """Turn recipe/log cost lines into displayable lines with each item's
+        current stock quantity.
 
-        Returns dicts: item_id, item_name, status_id, status_name, qty,
-        available (current count in that bucket), enough (bool).
+        Returns dicts: item_id, item_name, qty, available (in stock),
+        enough (bool), deleted (the item no longer exists).
         """
         lines = []
         for c in costs:
             item = self.inventory.get_item(c["item_id"])
             qty = int(c.get("qty") or 0)
-            if item is None:
-                lines.append({
-                    "item_id": c["item_id"],
-                    "item_name": c.get("item_name") or "(deleted item)",
-                    "status_id": c.get("status_id"),
-                    "status_name": c.get("status_name") or "",
-                    "qty": qty, "available": 0, "enough": False,
-                })
-                continue
-            sid = c.get("status_id") or item["default_status_id"]
-            status = next((s for s in item["statuses"] if s["id"] == sid), None)
-            if status is None and item["statuses"]:
-                status = item["statuses"][0]
-                sid = status["id"]
-            available = status["count"] if status else 0
+            available = item["quantity"] if item else 0
             lines.append({
-                "item_id": item["id"],
-                "item_name": item["name"],
-                "status_id": sid,
-                "status_name": status["name"] if status else "",
+                "item_id": c["item_id"],
+                "item_name": (item["name"] if item
+                              else c.get("item_name") or "(deleted item)"),
                 "qty": qty,
                 "available": available,
-                "enough": qty <= available,
+                "enough": item is not None and qty <= available,
+                "deleted": item is None,
             })
         return lines
 
     # --------------------------------------------------------- Type writes
-    def add_type(self, name: str, description: str = "") -> int:
+    # ``reload=False`` lets a batch of writes re-read once at the end.
+    def add_type(self, name: str, description: str = "", reload: bool = True) -> int:
         tid = self._db.exec_proc("usp_event_type_insert", {
             "name": to_param(name),
             "description": to_param(description),
         }, returns_id=True)
-        self.reload()
+        if reload:
+            self.reload()
         return tid
 
     def update_type(self, type_id, name: str, description: str = "",
-                    is_archived: bool = False) -> None:
+                    is_archived: bool = False, reload: bool = True) -> None:
         self._db.exec_proc("usp_event_type_update", {
             "id": int(type_id),
             "name": to_param(name),
             "description": to_param(description),
             "is_archived": 1 if is_archived else 0,
         })
-        self.reload()
+        if reload:
+            self.reload()
 
-    def delete_type(self, type_id) -> None:
+    def delete_type(self, type_id, reload: bool = True) -> None:
         self._db.exec_proc("usp_event_type_delete", {"id": int(type_id)})
-        self.reload()
+        if reload:
+            self.reload()
 
-    def set_type_cost(self, type_id, item_id, qty: int) -> None:
+    def set_type_cost(self, type_id, item_id, qty: int, reload: bool = True) -> None:
         """Set (or, at qty<=0, remove) one recipe line for an event type."""
         self._db.exec_proc("usp_event_type_cost_set", {
             "event_type_id": int(type_id),
             "item_id": int(item_id),
             "qty": int(qty),
         })
-        self.reload()
+        if reload:
+            self.reload()
 
     # ---------------------------------------------------------- Log writes
     def log_event(self, type_id, event_name: str, person: str, comment: str,
@@ -174,8 +166,7 @@ class EventLogManager:
         """Update a log entry's metadata; if ``cost_lines`` is given, restore the
         old costs, replace the snapshot, and deduct the new ones."""
         if cost_lines is not None:
-            self._restore_log(log_id)
-            self._db.exec_proc("usp_event_log_cost_delete_by_log",
+            self._db.exec_proc("usp_event_log_cost_restore",
                                {"event_log_id": int(log_id)})
             self._apply_lines(log_id, cost_lines)
         self._db.exec_proc("usp_event_log_update", {
@@ -188,15 +179,15 @@ class EventLogManager:
         self.reload()
 
     def delete_log(self, log_id, restore: bool = True) -> None:
-        """Delete a log entry; when ``restore`` add its costed items back first."""
-        if restore:
-            self._restore_log(log_id)
-        self._db.exec_proc("usp_event_log_delete", {"id": int(log_id)})
+        """Delete a log entry; when ``restore`` give back what it really took."""
+        self._db.exec_proc("usp_event_log_delete",
+                           {"id": int(log_id), "restore": 1 if restore else 0})
         self.inventory.reload()
         self.reload()
 
     # ------------------------------------------------------------- Helpers
     def _apply_lines(self, log_id, cost_lines: list) -> None:
+        """Insert each line; the proc deducts it (clamped) in the same transaction."""
         for line in cost_lines:
             qty = int(line.get("qty") or 0)
             if qty <= 0:
@@ -207,22 +198,3 @@ class EventLogManager:
                 "item_name": to_param(line.get("item_name")),
                 "qty": qty,
             }, returns_id=True)
-            # Deduct from the item's current deduct bucket (its first usable one).
-            sid = line.get("status_id") or self._deduct_bucket(line.get("item_id"))
-            if sid is not None:
-                self.inventory.deduct(sid, qty)
-
-    def _restore_log(self, log_id) -> None:
-        log = next((lg for lg in self._logs if lg["id"] == log_id), None)
-        if not log:
-            return
-        for c in log["costs"]:
-            qty = int(c.get("qty") or 0)
-            sid = self._deduct_bucket(c.get("item_id"))
-            if sid is not None and qty > 0:
-                self.inventory.restore(sid, qty)
-
-    def _deduct_bucket(self, item_id):
-        """The bucket events deduct from for an item (its first usable), or None."""
-        item = self.inventory.get_item(item_id) if item_id is not None else None
-        return item["default_status_id"] if item else None

@@ -201,6 +201,10 @@ class ImmersionCellsManager:
         except (ValueError, AttributeError):
             return ""
 
+    def duration_hours(self, cell: dict) -> str:
+        """Whole hours from the cell's start until now, as text ("" if unknown)."""
+        return self._calculate_duration(cell).rstrip("h")
+
     def filename_exists(self, data_filename: str, exclude_id=None) -> bool:
         """Return True if ``data_filename`` is already used by an experiment.
 

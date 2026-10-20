@@ -200,8 +200,8 @@ class StationSummaryManager:
                 self._db.exec_proc("usp_history_update", {"id": existing_id, **params})
             else:
                 self._db.exec_proc("usp_history_insert", params, returns_id=True)
-        except DatabaseError as e:
-            print(f"Error logging channel usage: {e}")
+        except DatabaseError:
+            raise  # the caller warns; a printed error is invisible in the exe
 
     def update_episode(self, episode_id, values: dict) -> bool:
         """Update a history episode via ``usp_history_update``. False on failure.
@@ -276,8 +276,8 @@ class StationSummaryManager:
                 params["start_hour"] = None
         try:
             self._db.exec_proc("usp_history_update", params)
-        except DatabaseError as e:
-            print(f"Error finishing episode: {e}")
+        except DatabaseError:
+            raise  # the caller warns; a printed error is invisible in the exe
 
     def _find_episode_id(self, channel: str, filename: str):
         """Return the id of the latest episode with ``filename`` on ``channel``."""

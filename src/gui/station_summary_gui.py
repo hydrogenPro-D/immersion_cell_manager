@@ -21,6 +21,7 @@ from src.gui.widgets.gantt_chart_widget import GanttChartWidget
 from src.gui.widgets.episode_info_dialog import EpisodeInfoDialog
 from src.gui.widgets.edit_row_dialog import EditRowDialog
 from src.gui.widgets.changes_dialog import ChangesDialog
+from src.gui.widgets.confirm_dialog import ConfirmDialog
 from src.gui.widgets.zoom_control import ZoomControl
 
 
@@ -38,7 +39,8 @@ class StationSummary(QWidget):
     # from the left edge). 0.5 = center, >0.5 = right of center.
     TODAY_VIEW_FRACTION = 0.75
 
-    def __init__(self, manager, cells_manager=None, on_cells_changed=None):
+    def __init__(self, manager, cells_manager=None, on_cells_changed=None,
+                 on_experiment_finished=None):
         super().__init__()
         self.manager = manager
         # Cells manager: lets us reuse the cell editor (EditRowDialog) to modify
@@ -47,6 +49,9 @@ class StationSummary(QWidget):
         # Called after this tab writes to a cell (e.g. deleting the current
         # experiment frees it), so the Cells Mapping tab can refresh right away.
         self.on_cells_changed = on_cells_changed
+        # Called with the episode's values when an edit takes it out of In use,
+        # so the experiment can be offered to the IC Logbook.
+        self.on_experiment_finished = on_experiment_finished
         self._initial_scroll_done = False
         # Cache of the unfiltered data + computed axis, so typing in the search
         # box re-filters without re-reading from disk.
@@ -343,12 +348,44 @@ class StationSummary(QWidget):
             self._sync_live_cell(channel, data, row_data[:len(cols)])
             self.reload_data()
             self._show_changes_dialog(channel, changes)
+            new_status = (values.get("status") or "").strip().lower()
+            if (old_status == "in use" and new_status == "test finished"
+                    and self.on_experiment_finished):
+                # Edited values win; anything left blank keeps the episode's own.
+                cell = {**{k: str(v or "") for k, v in data.items()},
+                        **{k: v for k, v in values.items() if str(v or "").strip()}}
+                self.on_experiment_finished(
+                    cell, lambda: self._undo_episode_finish(episode, values))
         else:
             print(f"[MODIFY] episode id={episode_id} update FAILED")
             QMessageBox.warning(
                 self, "Update failed",
                 "The experiment could not be updated. Please try again.",
             )
+
+    def _undo_episode_finish(self, episode: dict, values: dict) -> None:
+        """"Go back" in the logbook prompt: put the episode (and its live cell)
+        back to its In-use values, reopen the editor and say so."""
+        data = episode.get("data", {})
+        before = {k: str(data.get(k, "") or "") for k in values}
+        if not self.manager.update_episode(data.get("id"), before):
+            QMessageBox.warning(self, "Could not go back",
+                                "The experiment could not be moved back to In use.")
+            return
+        cols = self.cells_manager.get_column_names()
+        mapping = self.cells_manager.COLUMNS_MAPPING
+        cell_row = [str(data.get(mapping.get(c, ""), "") or "") for c in cols]
+        # The cell now carries the edited values, so match it by those.
+        self._sync_live_cell(before.get("channel", ""), values, cell_row)
+        self.reload_data()
+        if callable(self.on_cells_changed):
+            self.on_cells_changed()
+        ConfirmDialog.alert_over_next_dialog(
+            self, "Moved back to In use",
+            f"Channel <b>{before.get('channel', '')}</b> was moved back to <b>In use</b>.",
+            button_text="OK", destructive=False, icon="↩️",
+            subtitle="Nothing was added to the IC Logbook.")
+        self._modify_episode(episode)
 
     def _sync_live_cell(self, channel: str, data: dict, cell_row: list) -> None:
         """Mirror the edit onto the channel's cell when this is its live episode.
