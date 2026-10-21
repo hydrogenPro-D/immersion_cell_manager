@@ -29,7 +29,7 @@ _PRIMARY = (
     " QPushButton:hover { background:#3FA3A3; }"
 )
 _STEP_BTN = (
-    "QPushButton { background:#E4F2F2; color:#1A5E5E; border:1px solid #8FCFCF;"
+    "QPushButton { background:#E4F2F2; color:#000000; border:1px solid #8FCFCF;"
     " border-radius:2px; font-size:14px; font-weight:700; padding:0px; }"
     " QPushButton:hover { background:#CFE9E9; }"
     " QPushButton:pressed { background:#BADEDE; }"
@@ -303,7 +303,7 @@ class InventoryTab(QWidget):
     @staticmethod
     def _num(n) -> str:
         f = float(n)
-        return str(int(f)) if f.is_integer() else f"{f:g}"
+        return str(int(f)) if f.is_integer() else f"{f:.6f}".rstrip("0").rstrip(".")
 
     # --------------------------------------------------------- Count edits
     def _adjust(self, item_id, delta: int) -> None:
@@ -462,7 +462,7 @@ class _ItemDialog(QDialog):
 
 def _num_str(n) -> str:
     f = float(n)
-    return str(int(f)) if f.is_integer() else f"{f:g}"
+    return str(int(f)) if f.is_integer() else f"{f:.6f}".rstrip("0").rstrip(".")
 
 
 def _float_validator(parent):

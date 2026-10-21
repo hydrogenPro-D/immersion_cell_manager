@@ -14,7 +14,7 @@ class ZoomControl(QWidget):
     """Reusable zoom-out / percentage / zoom-in button group."""
 
     _BTN_STYLE = (
-        "QPushButton { background:#E2EAEF; color:#2C3E50; border:none;"
+        "QPushButton { background:#E2EAEF; color:#000000; border:none;"
         " border-radius:6px; font-size:16px; font-weight:700; }"
         " QPushButton:hover { background:#D0DCE5; }"
         " QPushButton:pressed { background:#BCCDD8; }"

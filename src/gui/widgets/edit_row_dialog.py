@@ -857,6 +857,13 @@ class EditRowDialog(QDialog):
             # Columns don't exist, skip
             pass
 
+    def prefill(self, values: dict) -> None:
+        """Override fields ({column name: text}), e.g. from an experiment plan."""
+        for column_name, text in values.items():
+            field = self.input_fields.get(column_name)
+            if field is not None:
+                self._set_editor_value(field, self._spec_for(column_name), text)
+
     def _kept_on_clear(self, status: str) -> tuple:
         """Fields (lower-cased) that survive the clear for ``status``."""
         extra = self.EXTRA_KEPT_ON_CLEAR.get(status.strip().lower(), ())

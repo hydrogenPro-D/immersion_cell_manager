@@ -95,14 +95,14 @@ TAB_STYLE = """
         font-size: 12px;
         font-weight: 600;
         letter-spacing: 0.4px;
-        color: #B23A48;
+        color: #000000;
         background-color: #FFFFFF;
         border: 1px solid #E7C2C7;
     }
     QPushButton#DangerButton:hover {
         background-color: #FBEDEF;
         border-color: #D98A95;
-        color: #8E2A37;
+        color: #000000;
     }
     QPushButton#DangerButton:pressed {
         background-color: #F4DADE;

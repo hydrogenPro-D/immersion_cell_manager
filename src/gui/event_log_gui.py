@@ -18,9 +18,10 @@ from src.data.db import DatabaseError
 from src.gui.styles.tab_styles import TAB_STYLE
 from src.gui.styles.dialog_styles import DIALOG_STYLE
 from src.gui.widgets.confirm_dialog import ConfirmDialog
+from src.gui.widgets.side_scroll import SideScroll
 from src.gui.widgets.edit_row_dialog import CalendarDateEdit, ProjectComboBox
 from src.gui.widgets.hover_border_table import (
-    HoverBorderTable, HOVER_TABLE_STYLE, fit_columns,
+    HoverBorderTable, HOVER_TABLE_STYLE, fit_columns, fill_columns,
 )
 
 _PRIMARY = (
@@ -80,7 +81,9 @@ class EventLogTab(QWidget):
         root.setSpacing(14)
         root.addWidget(self._build_header())
 
-        bar = QHBoxLayout()
+        bar_host = QWidget()  # scrolls sideways when narrow (keeps the window's minimum width down)
+        bar = QHBoxLayout(bar_host)
+        bar.setContentsMargins(0, 0, 0, 0)
         bar.setSpacing(10)
         manage = QPushButton("Manage event types")
         manage.setStyleSheet(_SECONDARY)
@@ -102,7 +105,7 @@ class EventLogTab(QWidget):
         log_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         log_btn.clicked.connect(self._log_event)
         bar.addWidget(log_btn)
-        root.addLayout(bar)
+        root.addWidget(SideScroll(bar_host))
 
         # Same table look as the IC Logbook (teal header, row borders).
         self.table = HoverBorderTable(selectable=True)
@@ -203,7 +206,7 @@ class EventLogTab(QWidget):
                     item.setData(_LOG_ID, lg["id"])  # rows can be re-sorted
                 self.table.setItem(r, c, item)
         self.table.apply_sort()
-        fit_columns(self.table)
+        fill_columns(self.table)
         self.table.resizeRowsToContents()
 
     def _notify_inventory(self) -> None:
@@ -803,7 +806,7 @@ class EventTypeDialog(QDialog):
         remove = QPushButton("✕")
         remove.setFixedWidth(28)
         remove.setStyleSheet(
-            "QPushButton { background:transparent; border:none; color:#8895A0; }"
+            "QPushButton { background:transparent; border:none; color:#000000; }"
             " QPushButton:hover { color:#9A2A1E; }")
         entry = {"combo": combo, "spin": spin, "widget": row}
         remove.clicked.connect(lambda: self._remove_cost_row(entry))

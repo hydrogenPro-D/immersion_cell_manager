@@ -43,11 +43,12 @@ append-only, so `010` is never edited again).
 | 020 | `020_create_ic_logbook_projects.sql` | IC Logbook projects with their own column lists (`ic_logbook_project`, `_project_column`) + custom-column values (`ic_logbook_value`); seeds the existing projects; `usp_ic_logbook_project_create` / `usp_ic_logbook_value_set` |
 | 021 | `021_add_ic_logbook_project_archive.sql` | adds `is_archived` to `ic_logbook_project` (projects are archived, never deleted) + `usp_ic_logbook_project_set_archived` |
 | 022 | `022_ic_logbook_project_rename.sql` | `usp_ic_logbook_project_rename` (renames a project and its experiments' category in one transaction); "Summary" is reserved in create + rename |
+| 023 | `023_create_experiment_plans.sql` | `icm.experiment_plan` (pending -> scheduled -> started; deleted / started rows are kept) + `usp_experiment_plan_*` procs |
 
 ## How to run
 
 1. Connect SSMS / Azure Data Studio to the target database (apply to **`dataloggingTest`** first, `dataloggingDev` after).
-2. Run `001` → `022` in order. Each file is safe to re-run.
+2. Run `001` → `023` in order. Each file is safe to re-run.
 3. For `003`, set a real password in `@pw` first, run, then **close without saving**.
 4. Confirm: `SELECT * FROM icm.schema_migrations ORDER BY id;`
 

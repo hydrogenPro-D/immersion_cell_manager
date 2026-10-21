@@ -1,5 +1,5 @@
 import sys
-from datetime import date
+from datetime import date, datetime, timedelta
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QTabWidget, QMessageBox,
     QTabBar,
@@ -7,12 +7,14 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QEventLoop, QEvent, QObject, QTimer
 from src.data.db import DatabaseChangeNotifier, DatabaseError
 from src.splash import EXTRA_BREATHS
+from src.app_version import current_version, UNKNOWN
 from src.data.immersion_cells_manager import ImmersionCellsManager
 from src.data.station_summary_manager import StationSummaryManager
 from src.data.calibration_manager import CalibrationManager
 from src.data.logbook_manager import LogbookManager
 from src.data.inventory_manager import InventoryManager
 from src.data.event_log_manager import EventLogManager
+from src.data.experiment_plan_manager import ExperimentPlanManager
 from src.data.projects_manager import invalidate_projects_cache
 from src.gui.cells_mapping import CellsMapping
 from src.gui.station_summary_gui import StationSummary
@@ -20,6 +22,7 @@ from src.gui.calibration_gui import CalibrationTab
 from src.gui.logbook_gui import LogbookTab, offer_logbook_entry
 from src.gui.inventory_gui import InventoryTab
 from src.gui.event_log_gui import EventLogTab
+from src.gui.experiment_planning_gui import ExperimentPlanningTab
 
 
 def load_managers() -> dict:
@@ -33,6 +36,7 @@ def load_managers() -> dict:
         "logbook": LogbookManager(),
         "inventory": inventory,
         "events": EventLogManager(inventory),
+        "plans": ExperimentPlanManager(),
     }
 
 
@@ -62,6 +66,7 @@ class MainWindow(QMainWindow):
         self.logbook_manager = m["logbook"]
         self.inventory_manager = m["inventory"]
         self.event_manager = m["events"]
+        self.plan_manager = m["plans"]
         self._pump = pump or (lambda: None)
         self._wheel_blocker = _TabBarWheelBlocker(self)
         self.init_ui()
@@ -78,7 +83,10 @@ class MainWindow(QMainWindow):
             bar.installEventFilter(self._wheel_blocker)
 
     def init_ui(self):
-        self.setWindowTitle("Immersion Cell Manager")
+        # "(dev build)" tells a bug screenshot from source apart from a release.
+        version = current_version()
+        self.setWindowTitle(f"Immersion Cell Manager  v{version}" if version != UNKNOWN
+                            else "Immersion Cell Manager  (dev build)")
 
         # Create central widget
         central_widget = QWidget()
@@ -163,6 +171,10 @@ class MainWindow(QMainWindow):
         # The event manager has re-read the inventory already: just redraw.
         self.event_log_tab = EventLogTab(
             self.event_manager, on_inventory_changed=self.inventory_tab.refresh)
+        self.planning_tab = ExperimentPlanningTab(
+            self.plan_manager, self.cells_manager,
+            protocols=lambda: self.logbook_manager.get_recent_values("protocol"),
+            on_load=self._load_plan)
 
         self.tabs.addTab(self.cells_mapping_tab, "Cells mapping")
         self.tabs.addTab(self.station_summary_tab, "Station Summary")
@@ -170,6 +182,7 @@ class MainWindow(QMainWindow):
         self._logbook_index = self.tabs.addTab(QWidget(), "IC Logbook")
         self.tabs.addTab(self.inventory_tab, "Inventory")
         self.tabs.addTab(self.event_log_tab, "Event Log")
+        self.tabs.addTab(self.planning_tab, "Experiment planning")
         self.tabs.currentChanged.connect(self._build_logbook_on_first_open)
 
 
@@ -199,6 +212,33 @@ class MainWindow(QMainWindow):
             undo()
         elif outcome == "added" and self.logbook_tab is not None:
             self.logbook_tab.show_added(category)
+
+    def _load_plan(self, plan: dict, channel: str) -> bool:
+        """Open ``channel``'s Cells mapping editor prefilled from ``plan``; the
+        user completes it. True once the cell was saved In use."""
+        now = datetime.now()
+        prefill = {
+            "Status": "In use",
+            "Project ID": plan.get("project_id", ""),
+            "Anode": plan.get("anode", ""),
+            "Cathode": plan.get("cathode", ""),
+            "Current owner": plan.get("name", ""),  # the plan's Name is its requester
+            "Start date": now.strftime("%Y-%m-%d %H:00"),
+        }
+        try:
+            hours = float((plan.get("test_length_h") or "").replace(",", "."))
+            prefill["Expected end date"] = (now + timedelta(hours=hours)).strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+        notes = [f"{label}: {plan[key]}" for key, label in (("protocol", "Protocol"),
+                                                             ("aim", "Aim")) if plan.get(key)]
+        if notes:
+            prefill["Comments"] = "\n".join(notes)
+        self.tabs.setCurrentWidget(self.cells_mapping_tab)
+        loaded = self.cells_mapping_tab.open_plan(channel, prefill)
+        if not loaded:
+            self.tabs.setCurrentWidget(self.planning_tab)  # cancelled: back to the plan
+        return loaded
 
     def _build_logbook_on_first_open(self, index: int) -> None:
         if index != self._logbook_index or self.logbook_tab is not None:
@@ -235,10 +275,13 @@ class MainWindow(QMainWindow):
             self.cells_mapping_tab.reload_data()
             self.station_summary_tab.reload_data()
             self.calibration_tab.reload_data()
+            self.planning_tab.refresh()  # the busy-cell warnings follow the cells
         if tables & _INVENTORY_TABLES:
             self.inventory_tab.reload()  # first: event dialogs read stock from it
         if tables & _EVENT_TABLES:
             self.event_log_tab.reload()
+        if "experiment_plan" in tables:
+            self.planning_tab.reload()
         if any(t.startswith("ic_logbook") for t in tables):
             if self.logbook_tab is not None:
                 self.logbook_tab.reload_data()

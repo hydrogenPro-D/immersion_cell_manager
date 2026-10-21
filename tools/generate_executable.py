@@ -8,6 +8,7 @@ import stat
 import os
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))  # so src.app_version imports when run from tools/
 TOOLS_DIR = Path(__file__).resolve().parent
 ENTRY_SCRIPT = PROJECT_ROOT / "main.py"
 SPEC_PATH = TOOLS_DIR
@@ -231,6 +232,59 @@ def _bootstrap_spec() -> None:
     _run_pyinstaller(command)
 
 
+def _prompt_build_type() -> str:
+    """"prod" or "test". Only a production build may bump the version."""
+    answer = input("Production or test build? [p/T]: ").strip().lower()
+    return "prod" if answer in ("p", "prod", "production") else "test"
+
+
+def _choose_version(environment: str) -> str:
+    """Decide the version for this build, asking before anything slow runs."""
+    from src.app_version import next_version
+
+    current = _current_version()
+    if environment != "prod":
+        print(f"Test build, keeping version {current or '1.0'} (no bump).")
+        return current or "1.0"
+
+    proposed = next_version(current)
+    answer = input(
+        f"\nThis is a PRODUCTION build.\n"
+        f"  current version: {current or 'none yet'}\n"
+        f"  bump to:         {proposed}\n"
+        "Bump the version? [y/N]: "
+    ).strip().lower()
+    if answer in ("y", "yes"):
+        return proposed
+    print(f"Keeping version {current or '1.0'}.")
+    return current or "1.0"
+
+
+def _current_version() -> str | None:
+    """The last released version, from the repo file."""
+    import json
+
+    repo_version_file = CONFIG_FOLDER / "version.json"
+    if not repo_version_file.exists():
+        return None
+    try:
+        return json.loads(repo_version_file.read_text(encoding="utf-8")).get("version")
+    except (OSError, ValueError):
+        return None
+
+
+def _write_version_file(config_dest: Path, version: str, environment: str) -> None:
+    """Production: record the release in the repo copy, then ship it. Test: ship
+    the repo copy as it is, so a test build never moves the release record."""
+    from src.app_version import write_version_file
+
+    repo_version_file = CONFIG_FOLDER / "version.json"
+    if environment == "prod":
+        info = write_version_file(repo_version_file, version)
+        print(f"Version {info['version']}, built {info['released_at']}")
+    _copy_file(repo_version_file, config_dest / "version.json")
+
+
 def build_executable() -> None:
     """Build the executable.
 
@@ -243,6 +297,10 @@ def build_executable() -> None:
     """
     if not ENTRY_SCRIPT.exists():
         raise FileNotFoundError(f"Could not find entry script: {ENTRY_SCRIPT}")
+
+    # Every question up front, so the slow PyInstaller run is unattended.
+    environment = _prompt_build_type()
+    version = _choose_version(environment)
 
     if SPEC_FILE.exists():
         _build_from_existing_spec()
@@ -272,6 +330,8 @@ def build_executable() -> None:
     # _internal/config in the build.
     config_dest = EXECUTABLE_FOLDER / "_internal" / "config"
     _copy_folder(CONFIG_FOLDER, config_dest)
+    # Recorded only now that the build exists; a failed build records nothing.
+    _write_version_file(config_dest, version, environment)
 
     # Copy the icons; src/splash.py resolves them as _internal/assets.
     for name in SHIPPED_ICONS:

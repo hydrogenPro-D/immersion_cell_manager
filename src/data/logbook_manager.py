@@ -14,7 +14,7 @@ import json
 import uuid
 from datetime import date, datetime
 
-from src.data.db import get_db, DatabaseError, to_text, to_param
+from src.data.db import get_db, DatabaseError, to_text, to_param, db_message as _db_message
 
 # The date the IC_ID system was introduced (auto-computes a new snapshot's
 # "days since intro"; kept in sync with the Excel Summary sheet).
@@ -78,14 +78,6 @@ _LOGBOOK_COLUMNS = [
     "archived_in", "plot", "synthesis_recipe", "synthesis_time_h",
     "synthesis_temperature_c", "coating_test_on",
 ]
-
-
-def _db_message(error) -> str:
-    """The readable part of a proc's THROW (drops the ODBC prefix and codes)."""
-    text = str(error)
-    if "[SQL Server]" in text:
-        text = text.split("[SQL Server]")[-1].split("(50000)")[0]
-    return text.strip()
 
 
 class LogbookManager:

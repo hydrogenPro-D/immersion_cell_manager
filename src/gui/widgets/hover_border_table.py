@@ -8,10 +8,14 @@ import unicodedata
 
 from PyQt6.QtWidgets import (
     QTableWidget, QAbstractItemView, QHeaderView, QStyledItemDelegate,
-    QStyleOptionViewItem, QStyle,
+    QStyleOptionViewItem, QStyle, QApplication,
 )
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QPen
+from PyQt6.QtCore import Qt, QEvent, QRect, QSize
+from PyQt6.QtGui import QColor, QIcon, QPen
+
+# An icon drawn right after a cell's text (Qt's own icon always goes first).
+TRAILING_ICON_ROLE = Qt.ItemDataRole.UserRole + 52
+_TRAILING_SIZE, _TRAILING_GAP = 14, 6
 
 HOVER_TABLE_STYLE = (
     "QTableWidget { background:#FFFFFF; border:1px solid #E1E8ED;"
@@ -43,6 +47,19 @@ def fit_columns(table: QTableWidget) -> None:
         table.resizeColumnToContents(c)
 
 
+def fill_columns(table: "HoverBorderTable", max_width: int = 400) -> None:
+    """Size columns to their contents (at most ``max_width``: long text wraps);
+    spare width is shared out in proportion to those widths. Too little width:
+    a horizontal scrollbar instead."""
+    header = table.horizontalHeader()
+    header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+    header.setStretchLastSection(False)
+    table.resizeColumnsToContents()
+    table._natural_widths = [min(table.columnWidth(c), max_width)
+                             for c in range(table.columnCount())]
+    table._spread_columns()
+
+
 class RowHoverBorderDelegate(QStyledItemDelegate):
     """Outlines whole rows with a border (no background change): a thin one on
     the hovered row, a thicker/darker one on the selected row. No fills."""
@@ -56,11 +73,29 @@ class RowHoverBorderDelegate(QStyledItemDelegate):
         opt.state &= ~(QStyle.StateFlag.State_MouseOver
                        | QStyle.StateFlag.State_Selected)  # no hover / selection fill
         super().paint(painter, opt, index)
+        icon = index.data(TRAILING_ICON_ROLE)
+        if isinstance(icon, QIcon):
+            self._paint_trailing(painter, option, index, icon)
 
         if selected:
             self._border(painter, option, index, self.SELECTED, 2)
         elif getattr(self.parent(), "_hover_row", -1) == index.row():
             self._border(painter, option, index, self.HOVER, 1)
+
+    def _paint_trailing(self, painter, option, index, icon) -> None:
+        o = QStyleOptionViewItem(option)
+        self.initStyleOption(o, index)
+        style = o.widget.style() if o.widget else QApplication.style()
+        text = style.subElementRect(QStyle.SubElement.SE_ItemViewItemText, o, o.widget)
+        x = text.left() + o.fontMetrics.horizontalAdvance(o.text) + _TRAILING_GAP
+        y = option.rect.center().y() - _TRAILING_SIZE // 2 + 1
+        icon.paint(painter, QRect(x, y, _TRAILING_SIZE, _TRAILING_SIZE))
+
+    def sizeHint(self, option, index):
+        size = super().sizeHint(option, index)
+        if isinstance(index.data(TRAILING_ICON_ROLE), QIcon):
+            size = QSize(size.width() + _TRAILING_GAP + _TRAILING_SIZE, size.height())
+        return size
 
     @staticmethod
     def _border(painter, option, index, color, width):
@@ -98,9 +133,41 @@ class HoverBorderTable(QTableWidget):
             self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         else:
             self.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        # Set by fill_columns: content widths that _spread_columns scales up.
+        self._natural_widths = None
+        self._scale = 1.0
+        self._spreading = False
+        self.horizontalHeader().sectionResized.connect(self._on_section_resized)
+
+    # ---------------------------------------------- Proportional column fill
+    def _spread_columns(self) -> None:
+        natural = self._natural_widths
+        if not natural or len(natural) != self.columnCount():
+            return
+        avail = self.viewport().width()
+        self._scale = max(1.0, avail / sum(natural)) if sum(natural) else 1.0
+        widths = [int(w * self._scale) for w in natural]
+        if self._scale > 1.0:
+            widths[-1] += avail - sum(widths)  # rounding leftovers; no scrollbar
+        self._spreading = True
+        for c, w in enumerate(widths):
+            self.setColumnWidth(c, w)
+        self._spreading = False
+
+    def _on_section_resized(self, column: int, _old: int, new: int) -> None:
+        # A border dragged by the user becomes that column's base width.
+        if self._natural_widths and not self._spreading and column < len(self._natural_widths):
+            self._natural_widths[column] = max(20, round(new / self._scale))
+
+    def viewportEvent(self, event):
+        result = super().viewportEvent(event)
+        if event.type() == QEvent.Type.Resize:
+            self._spread_columns()  # also when the vertical scrollbar comes or goes
+        return result
 
     # ------------------------------------------------------- Header sorting
     _ORIGINAL_ROW = Qt.ItemDataRole.UserRole + 50  # row's position before sorting
+    SORT_ROLE = Qt.ItemDataRole.UserRole + 51  # optional number to sort by instead of the text
 
     def enable_header_sort(self) -> None:
         """Click a header to sort, like the Cells mapping table: ascending, then
@@ -122,7 +189,12 @@ class HoverBorderTable(QTableWidget):
         else:
             self._sort = (None, False)
         self.apply_sort()
-        if column < self.columnCount() - 1:  # the last one stretches anyway
+        if self._natural_widths:
+            # Room for the ▲ / ▼, then share the width out again.
+            self._natural_widths[column] = max(self.sizeHintForColumn(column),
+                                               self.horizontalHeader().sectionSizeHint(column))
+            self._spread_columns()
+        elif column < self.columnCount() - 1:  # the last one stretches anyway
             self.resizeColumnToContents(column)  # room for the ▲ / ▼
 
     @staticmethod
@@ -135,6 +207,13 @@ class HoverBorderTable(QTableWidget):
             plain = "".join(ch for ch in unicodedata.normalize("NFKD", text.lower())
                             if not unicodedata.combining(ch))
             return (1, 0.0, plain)
+
+    @classmethod
+    def _item_key(cls, item):
+        value = item.data(cls.SORT_ROLE) if item is not None else None
+        if value is not None:
+            return (0, float(value), "")
+        return cls._sort_key(item.text() if item is not None else "")
 
     def apply_sort(self) -> None:
         """(Re)apply the current sort; with none, restore the original order."""
@@ -149,8 +228,7 @@ class HoverBorderTable(QTableWidget):
         if col is None:
             rows.sort(key=lambda row: row[0].data(self._ORIGINAL_ROW) if row[0] else 0)
         else:
-            rows.sort(key=lambda row: self._sort_key(row[col].text() if row[col] else ""),
-                      reverse=desc)
+            rows.sort(key=lambda row: self._item_key(row[col]), reverse=desc)
         for r, row in enumerate(rows):
             for c, item in enumerate(row):
                 if item is not None:
