@@ -45,12 +45,12 @@ _REJECT_STYLE = (
     " QPushButton:disabled{background:#EBC6B6;color:#F6E9E2;}"
 )
 _NEUTRAL_STYLE = (
-    "QPushButton{background:#EBEFF2;color:#33404A;border:none;border-radius:6px;"
+    "QPushButton{background:#EBEFF2;color:#000000;border:none;border-radius:6px;"
     "padding:5px 10px;font-weight:600;} QPushButton:hover{background:#DCE3E8;}"
     " QPushButton:disabled{background:#F1F3F5;color:#AEB6BD;}"
 )
 _DELETE_STYLE = (
-    "QPushButton{background:#F3D9D6;color:#9A2A1E;border:none;border-radius:6px;"
+    "QPushButton{background:#F3D9D6;color:#000000;border:none;border-radius:6px;"
     "padding:5px 10px;font-weight:600;} QPushButton:hover{background:#E9C4C0;}"
     " QPushButton:disabled{background:#F0E7E6;color:#C9B6B3;}"
 )

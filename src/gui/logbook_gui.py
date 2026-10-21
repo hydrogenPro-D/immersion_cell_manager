@@ -37,7 +37,7 @@ _SUBTAB_STYLE = (
 # Secondary button. Enabled: teal-tinted with a teal border so it clearly reads
 # as active; disabled: flat, borderless grey so the state change is obvious.
 _SECONDARY_BTN = (
-    "QPushButton { background:#E4F2F2; color:#1A5E5E; border:1px solid #6FBFBF;"
+    "QPushButton { background:#E4F2F2; color:#000000; border:1px solid #6FBFBF;"
     " border-radius:3px; padding:9px 20px; font-size:12px; font-weight:700;"
     " letter-spacing:0.4px; }"
     " QPushButton:hover { background:#D2EAEA; border-color:#4FB0B0; }"
@@ -691,7 +691,7 @@ class ScoreboardDialog(QDialog):
     """
 
     _DELETE_STYLE = (
-        "QPushButton{background:#F3D9D6;color:#9A2A1E;border:1px solid #E7C6C1;"
+        "QPushButton{background:#F3D9D6;color:#000000;border:1px solid #E7C6C1;"
         "border-radius:8px;padding:8px 16px;font-weight:600;}"
         " QPushButton:hover{background:#E9C4C0;}"
     )
@@ -862,7 +862,7 @@ class ExperimentDialog(QDialog):
 
     _MULTILINE = {"notes"}
     _DELETE_STYLE = (
-        "QPushButton{background:#F3D9D6;color:#9A2A1E;border:1px solid #E7C6C1;"
+        "QPushButton{background:#F3D9D6;color:#000000;border:1px solid #E7C6C1;"
         "border-radius:8px;padding:8px 16px;font-weight:600;}"
         " QPushButton:hover{background:#E9C4C0;}"
     )

@@ -40,3 +40,45 @@ problems found in the new code (not fixed yet):
 
 
 
+
+
+
+
+Experiments planning:
+
+tabs
+planning  approval pending         schedule
+
+
+planning:
+request:
+name
+test length
+electrodes
+anodes/cathodes
+protocol: dropdown list
+project:
+aim:
+urgency:
+
+
+
+approval: this is for Balázs
+
+új field:
+channel: fixed vagy valahova
+
+you can modify stuf. you can approve it.
+
+it goes into scheduled:
+a list of experiments. should be ordered in any way by drag and drop
+
+from here, you can load the experiemnt into the cell mapper. with the necessary infomration.
+
+a planing, az egy form, és azonnal bekerül a pendingbe.
+
+DONE (app side, branch experiment_planning): Experiment planning tab. needs migration 023 (NOT RUN yet)
+- decided: electrodes dropped (only Anode + Cathode), project = Cells mapping projects, protocol = earlier protocols + typing, urgency Low / Normal / High / Urgent
+- approve asks for the approver's name (stored), anyone can approve
+- load opens the Cells mapping editor prefilled (In use, project, anode, cathode, current owner = Name (the requester), start now, expected end = start + test length, comments = protocol + aim)
+- loaded / deleted plans disappear from the app, stay in the db as started / deleted

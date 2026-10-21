@@ -343,12 +343,12 @@ DIALOG_STYLE = """
         letter-spacing: 0.4px;
         border: 1px solid #D8E2E8;
         background-color: #FFFFFF;
-        color: #4A5A66;
+        color: #000000;
     }
     QPushButton:hover {
         background-color: #F0F4F6;
         border-color: #BBD0D8;
-        color: #1F2A33;
+        color: #000000;
     }
     QPushButton:pressed {
         background-color: #E2EAEF;

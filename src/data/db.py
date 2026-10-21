@@ -46,6 +46,14 @@ def _is_connection_error(error) -> bool:
     return bool(getattr(error, "args", None)) and str(error.args[0]) in _CONNECTION_STATES
 
 
+def db_message(error) -> str:
+    """The readable part of a proc's THROW (drops the ODBC prefix and codes)."""
+    text = str(error)
+    if "[SQL Server]" in text:
+        text = text.split("[SQL Server]")[-1].split("(50000)")[0]
+    return text.strip()
+
+
 def to_text(value) -> str:
     """Render a DB value the way the old file backend did, as a string.
 
@@ -301,6 +309,7 @@ _SELF_REFRESHING = (
                     "inventory_item")),
     ("usp_ic_logbook_", ("ic_logbook", "ic_logbook_value", "ic_logbook_project",
                          "ic_logbook_project_column", "ic_logbook_scoreboard")),
+    ("usp_experiment_plan_", ("experiment_plan",)),
 )
 
 
@@ -317,27 +326,48 @@ class DatabaseChangeNotifier(QObject):
         self._sql = None
         self._fingerprint = None
         self._own_tables = set()  # written by this app, awaiting a re-baseline
+        self._polls = 0
         self._db.add_write_listener(self._on_own_write)
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._check)
         self._timer.start(interval_ms)
 
+    # Types BINARY_CHECKSUM can't take as an explicit column.
+    _NOT_COMPARABLE = ("text", "ntext", "image", "xml", "sql_variant",
+                       "geometry", "geography", "hierarchyid")
+    _REBUILD_EVERY = 12  # polls (~1 min): picks up tables a migration adds
+
     def _build_sql(self) -> str:
-        # COUNT catches inserts/deletes; BINARY_CHECKSUM also catches case-only edits.
-        names = [r["name"] for r in self._db.fetch_all(
-            "SELECT name FROM sys.tables WHERE schema_id = SCHEMA_ID('icm')"
-            " AND name <> 'schema_migrations' ORDER BY name")]
+        # COUNT catches inserts/deletes. Each row's checksum is multiplied by a
+        # second one over its columns in reverse order: CHECKSUM_AGG (an XOR)
+        # missed values swapped between rows, e.g. a schedule reorder.
+        cols = {}
+        for r in self._db.fetch_all(
+                "SELECT t.name AS tbl, c.name AS col, ty.name AS typ FROM sys.tables t"
+                " JOIN sys.columns c ON c.object_id = t.object_id"
+                " JOIN sys.types ty ON ty.user_type_id = c.user_type_id"
+                " WHERE t.schema_id = SCHEMA_ID('icm') AND t.name <> 'schema_migrations'"
+                " ORDER BY t.name, c.column_id"):
+            usable = cols.setdefault(r["tbl"], [])
+            if r["typ"] not in self._NOT_COMPARABLE:
+                usable.append(r["col"])
         parts = []
-        for n in names:
+        for n, usable in cols.items():
             parts.append(f"(SELECT COUNT(*) FROM icm.[{n}]) AS [{n}|count]")
-            parts.append(f"(SELECT ISNULL(CHECKSUM_AGG(BINARY_CHECKSUM(*)), 0)"
-                         f" FROM icm.[{n}]) AS [{n}|sum]")
+            if usable:
+                reverse = ", ".join(f"[{c}]" for c in reversed(usable))
+                fp = (f"SUM(CAST(BINARY_CHECKSUM(*) AS DECIMAL(38,0))"
+                      f" * BINARY_CHECKSUM({reverse}))")
+            else:
+                fp = "CHECKSUM_AGG(BINARY_CHECKSUM(*))"
+            parts.append(f"(SELECT ISNULL({fp}, 0) FROM icm.[{n}]) AS [{n}|sum]")
         return "SELECT " + ", ".join(parts)
 
     def _read(self):
         """{table: (count, checksum)}, or None on a transient failure."""
         try:
-            if self._sql is None:
+            self._polls += 1
+            if self._sql is None or self._polls % self._REBUILD_EVERY == 0:
                 self._sql = self._build_sql()
             row = self._db.fetch_row(self._sql)
         except DatabaseError:

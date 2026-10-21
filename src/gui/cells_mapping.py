@@ -20,6 +20,7 @@ from src.gui.widgets.edit_row_dialog import EditRowDialog
 from src.gui.widgets.data_table_widget import DataTableWidget
 from src.gui.widgets.confirm_dialog import ConfirmDialog
 from src.gui.widgets.zoom_control import ZoomControl
+from src.gui.widgets.side_scroll import SideScroll
 from src.gui.widgets.projects_admin_dialog import ProjectsAdminDialog
 from src.gui.styles.tab_styles import TAB_STYLE
 
@@ -138,7 +139,9 @@ class CellsMapping(QWidget):
         toolbar = QFrame()
         toolbar.setObjectName("Toolbar")
 
-        layout = QHBoxLayout(toolbar)
+        # The row scrolls sideways when narrow, so it doesn't set the window's minimum width.
+        inner = QWidget()
+        layout = QHBoxLayout(inner)
         layout.setContentsMargins(14, 10, 14, 10)
         layout.setSpacing(10)
 
@@ -149,6 +152,7 @@ class CellsMapping(QWidget):
         self.search_input.setObjectName("SearchInput")
         self.search_input.setPlaceholderText("Search cells by channel, owner, status…")
         self.search_input.setClearButtonEnabled(True)
+        self.search_input.setMinimumWidth(240)  # when narrow the row scrolls instead
         self.search_input.textChanged.connect(self._apply_filter)
 
         layout.addWidget(search_label)
@@ -165,7 +169,7 @@ class CellsMapping(QWidget):
         manage_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         manage_btn.setFixedWidth(150)
         manage_btn.setStyleSheet(
-            "QPushButton { background:#EBEFF2; color:#33404A; border:none;"
+            "QPushButton { background:#EBEFF2; color:#000000; border:none;"
             " border-radius:6px; padding:8px 14px; font-weight:600; }"
             " QPushButton:hover { background:#DCE3E8; }"
         )
@@ -189,6 +193,10 @@ class CellsMapping(QWidget):
         layout.addWidget(manage_btn)
         layout.addWidget(self.add_button)
         layout.addWidget(self.remove_button)
+
+        outer = QHBoxLayout(toolbar)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(SideScroll(inner))
 
         # Subtle shadow for the toolbar card
         shadow = QGraphicsDropShadowEffect(self)
@@ -252,8 +260,9 @@ class CellsMapping(QWidget):
         """Handle double-click on a row to edit it"""
         self.open_edit_dialog(index.row())
 
-    def open_edit_dialog(self, row):
-        """Open a dialog to edit row values"""
+    def open_edit_dialog(self, row, prefill: dict = None):
+        """Open a dialog to edit row values. ``prefill`` ({column name: text})
+        overrides fields after loading (an experiment plan being loaded)."""
         channel = self._channel_for_row(row)
         stale = bool(channel) and channel in self.table._stale_channels
         has_cal = bool(channel) and self.calibration_manager is not None
@@ -266,6 +275,8 @@ class CellsMapping(QWidget):
             calibration_stale=stale, calibration_pending=pending,
             calibration_failed=failed,
         )
+        if prefill:
+            dialog.prefill(prefill)
         dialog.row_saved.connect(self._on_row_saved)
         self._finished_cell = None
         dialog.exec()
@@ -275,6 +286,20 @@ class CellsMapping(QWidget):
             (cell, before), self._finished_cell = self._finished_cell, None
             self.on_experiment_finished(
                 cell, lambda: self._undo_status_change(before, cell))
+
+    def open_plan(self, channel: str, prefill: dict) -> bool:
+        """Open ``channel``'s editor prefilled from an experiment plan. True once
+        the cell was saved In use."""
+        row = self._row_for_channel(channel)
+        if row == -1:
+            self.reload_data()  # added by another user since the last refresh
+            row = self._row_for_channel(channel)
+        if row == -1:
+            return False
+        self.table.selectRow(row)
+        self.open_edit_dialog(row, prefill)
+        cell = self.manager.get_cell_by_channel(channel)
+        return (cell.get("status") or "").strip().lower() == "in use"
 
     def add_row(self, data):
         """Add a row to the table"""
