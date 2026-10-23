@@ -273,6 +273,29 @@ def _current_version() -> str | None:
         return None
 
 
+def _db_config_source(environment: str) -> Path:
+    """The DB settings this build ships: the prod file for a production build,
+    the everyday (test) file otherwise. Checked before the slow build runs."""
+    import json
+
+    name = "db_config.prod.json" if environment == "prod" else "db_config.json"
+    source = CONFIG_FOLDER / name
+    if not source.exists():
+        raise FileNotFoundError(
+            f"{source} is missing. Copy db_config.example.json to {name} and fill it in.")
+    database = json.loads(source.read_text(encoding="utf-8")).get("database", "")
+    if environment == "prod" and database == "dataloggingTest":
+        raise ValueError(f"{name} points at dataloggingTest; a production build must not.")
+    print(f"This build connects to database: {database}")
+    return source
+
+
+def _ship_db_config(config_dest: Path, source: Path) -> None:
+    """Ship ``source`` as the app's db_config.json; the prod file never ships under its own name."""
+    _copy_file(source, config_dest / "db_config.json")
+    (config_dest / "db_config.prod.json").unlink(missing_ok=True)
+
+
 def _write_version_file(config_dest: Path, version: str, environment: str) -> None:
     """Production: record the release in the repo copy, then ship it. Test: ship
     the repo copy as it is, so a test build never moves the release record."""
@@ -300,6 +323,7 @@ def build_executable() -> None:
 
     # Every question up front, so the slow PyInstaller run is unattended.
     environment = _prompt_build_type()
+    db_config = _db_config_source(environment)
     version = _choose_version(environment)
 
     if SPEC_FILE.exists():
@@ -330,6 +354,7 @@ def build_executable() -> None:
     # _internal/config in the build.
     config_dest = EXECUTABLE_FOLDER / "_internal" / "config"
     _copy_folder(CONFIG_FOLDER, config_dest)
+    _ship_db_config(config_dest, db_config)
     # Recorded only now that the build exists; a failed build records nothing.
     _write_version_file(config_dest, version, environment)
 

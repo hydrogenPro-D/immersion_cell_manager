@@ -235,6 +235,15 @@ class StationSummaryManager:
             print(f"Error deleting episode: {e}")
             return False
 
+    def latest_episode_id(self, channel: str):
+        """Id of the channel's latest episode (same order as the timeline), or None."""
+        row = self._db.fetch_row(
+            "SELECT TOP 1 id FROM icm.channel_history WHERE channel = ? "
+            "ORDER BY start_date DESC, id DESC",
+            (channel,),
+        )
+        return int(row["id"]) if row else None
+
     def remove_project_from_history(self, project_name: str) -> int:
         """No-op: the DB FK ``ON DELETE SET NULL`` clears the project from every
         history row automatically when the project is deleted."""
