@@ -9,3 +9,4 @@ notes.txt
 
 # Local DB credentials (use config/db_config.example.json as the template)
 config/db_config.json
+config/db_config.prod.json

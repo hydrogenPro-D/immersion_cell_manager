@@ -20,6 +20,7 @@ from src.data.calibration_manager import (
     STATUS_IN_USE, parse_float,
 )
 from src.gui.styles.dialog_styles import DIALOG_STYLE
+from src.gui.widgets.drag_move import DragMoveMixin
 from src.gui.widgets.calibration_plot import CalibrationPlot
 from src.gui.widgets.confirm_dialog import ConfirmDialog
 from src.gui.widgets.edit_row_dialog import CalendarDateEdit
@@ -167,7 +168,7 @@ def install_row_toggle_deselect(table) -> None:
     table.viewport().installEventFilter(_RowHoverToggle(table))
 
 
-class AddMeasurementDialog(QDialog):
+class AddMeasurementDialog(DragMoveMixin, QDialog):
     """Card-styled form to add a measurement (or edit an existing one's readings).
 
     Mirrors the cells-mapper editor look (frameless rounded card, gradient header).
@@ -414,19 +415,6 @@ class AddMeasurementDialog(QDialog):
                 self, "Save failed",
                 "The measurement could not be saved. Please try again.",
             )
-
-    # ---------------------------------------------------- Window dragging
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_pos = (
-                event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            )
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if event.buttons() & Qt.MouseButton.LeftButton and hasattr(self, "_drag_pos"):
-            self.move(event.globalPosition().toPoint() - self._drag_pos)
-        super().mouseMoveEvent(event)
 
 
 class CalibrationDetailDialog(QDialog):

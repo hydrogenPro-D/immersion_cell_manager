@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFrame, QLabel, QPushButton, QLineEdit,
     QTextEdit, QComboBox, QSpinBox, QTableWidgetItem, QHeaderView,
     QAbstractItemView, QDialog, QScrollArea, QGraphicsDropShadowEffect, QMessageBox,
+    QCompleter, QSizePolicy,
 )
 from PyQt6.QtCore import Qt, QDate
 from PyQt6.QtGui import QColor
@@ -41,6 +42,13 @@ _DELETE_BTN = (
     " border-radius:3px; padding:8px 16px; font-weight:600; }"
     " QPushButton:hover { background:#E9C4C0; }"
 )
+_ADD_LINE_BTN = (
+    "QPushButton { background:#EEF4F6; color:#000000; border:1px solid #D8E2E8;"
+    " border-radius:3px; padding:6px 14px; font-size:12px; font-weight:600;"
+    " min-width:0px; }"
+    " QPushButton:hover { background:#DCEBEB; border-color:#8FCFCF; }"
+    " QPushButton:pressed { background:#CBE3E3; }"
+)
 
 # Dialog look with black field labels and near-square inputs.
 _DIALOG = DIALOG_STYLE + (
@@ -60,6 +68,37 @@ def _dropdown() -> QComboBox:
     combo.setStyleSheet("QComboBox#ProjectField { border-radius:2px; }")
     combo.setCursor(Qt.CursorShape.PointingHandCursor)
     return combo
+
+
+def _event_box(types: list) -> QComboBox:
+    """Event picker that also takes a typed name (a one-time custom event)."""
+    combo = _dropdown()
+    for t in types:
+        combo.addItem(t["name"], t["id"])
+    combo.setEditable(True)
+    combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+    # As you type, the rest of the first match appears selected; Tab keeps it.
+    completer = QCompleter(combo.model(), combo)
+    completer.setCompletionMode(QCompleter.CompletionMode.InlineCompletion)
+    completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+    combo.setCompleter(completer)
+    combo.lineEdit().editingFinished.connect(lambda: _match_case(combo))
+    # The arrow is an overlay; an editable combo opens only from this button.
+    combo.setStyleSheet("QComboBox#ProjectField { border-radius:2px; }"
+                        " QComboBox#ProjectField::drop-down { width: 34px; border: none; }")
+    combo.lineEdit().setStyleSheet(
+        "background:transparent; border:none; padding:0px;"
+        " selection-background-color:#BFE6E6; selection-color:#000000;")
+    combo.setCurrentIndex(-1)  # start empty so the event is picked deliberately
+    return combo
+
+
+def _match_case(combo: QComboBox) -> None:
+    """A typed listed name takes the list's spelling."""
+    text = combo.currentText().strip()
+    idx = combo.findText(text, Qt.MatchFlag.MatchFixedString)  # case-insensitive
+    if idx >= 0 and combo.itemText(idx) != combo.currentText():
+        combo.setEditText(combo.itemText(idx))
 
 
 class EventLogTab(QWidget):
@@ -254,7 +293,9 @@ class LogEventDialog(QDialog):
         self.editing = log is not None
         self.saved = False
         self.deleted = False
-        self._rows = []  # per cost line: dict(line, spin, after_lbl, base, widget)
+        self._rows = []  # per cost line: dict(line, spin, base); custom rows add combo, widget
+        self._empty = None
+        self._mode = None  # chosen type id, "custom", or None
         self._build()
 
     def _build(self):
@@ -280,13 +321,9 @@ class LogEventDialog(QDialog):
             row.addWidget(lbl, 1)
         else:
             row = self._field_row("Event")
-            self.type_combo = _dropdown()
-            for t in self.manager.get_types():
-                self.type_combo.addItem(t["name"], t["id"])
-            # Start empty so the user picks the event deliberately.
-            self.type_combo.setPlaceholderText("Choose an event")
-            self.type_combo.setCurrentIndex(-1)
-            self.type_combo.currentIndexChanged.connect(self._on_type_changed)
+            self.type_combo = _event_box(self.manager.get_types())
+            self.type_combo.editTextChanged.connect(self._on_event_text)
+            self.type_combo.lineEdit().editingFinished.connect(self._on_event_text)
             row.addWidget(self.type_combo, 1)
 
         # Cost preview.
@@ -307,6 +344,12 @@ class LogEventDialog(QDialog):
         cost_scroll.setWidget(self._cost_host)
         cost_scroll.setMinimumHeight(140)
         root.addWidget(cost_scroll, 1)
+        self.add_item_btn = QPushButton("+  Add item")
+        self.add_item_btn.setStyleSheet(_ADD_LINE_BTN)
+        self.add_item_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.add_item_btn.setAutoDefault(False)
+        self.add_item_btn.clicked.connect(self._add_custom_row)
+        root.addWidget(self.add_item_btn, 0, Qt.AlignmentFlag.AlignLeft)
 
         # Person / comment / dates.
         prow = self._field_row("Person")
@@ -376,15 +419,32 @@ class LogEventDialog(QDialog):
         return row
 
     # ---------------------------------------------------------- Cost rows
+    def _chosen(self):
+        """The event type shown (an inline suggestion counts, as Save would use it),
+        "custom" for a name not in the list, or None."""
+        name = self.type_combo.currentText().strip().lower()
+        if not name:
+            return None
+        return next((t for t in self.manager.get_types()
+                     if t["name"].strip().lower() == name), "custom")
+
+    def _is_custom(self) -> bool:
+        if self.editing:
+            return self.log["event_type_id"] is None
+        return self._mode == "custom"
+
     def _current_costs(self) -> list:
         if self.editing:
             return self.manager.resolve_costs(self.log["costs"])
-        tid = self.type_combo.currentData()
-        t = self.manager.get_type(tid)
-        return self.manager.resolve_costs(t["costs"]) if t else []
+        t = self._chosen()
+        return self.manager.resolve_costs(t["costs"]) if isinstance(t, dict) else []
 
-    def _on_type_changed(self, *_a):
-        self._load_costs()
+    def _on_event_text(self, *_a):
+        chosen = self._chosen()
+        mode = chosen["id"] if isinstance(chosen, dict) else chosen
+        if mode != self._mode:
+            self._mode = mode
+            self._load_costs()
 
     def _load_costs(self):
         while self._cost_layout.count():
@@ -393,13 +453,20 @@ class LogEventDialog(QDialog):
                 it.widget().hide()  # deleteLater alone leaves it visible a moment
                 it.widget().deleteLater()
         self._rows = []
+        self._empty = None
+        custom = self._is_custom()
+        self.add_item_btn.setVisible(custom)
         lines = self._current_costs()
         if not lines:
-            chosen = self.editing or self.type_combo.currentIndex() >= 0
-            empty = QLabel("This event has no inventory cost." if chosen
-                           else "Choose an event to see its inventory cost.")
-            empty.setStyleSheet("color:#8895A0; font-size:13px; padding:10px;")
-            self._cost_layout.addWidget(empty)
+            if custom:
+                msg = "Use “+ Add item” for the items this event uses, if any."
+            elif self.editing or self._mode is not None:
+                msg = "This event has no inventory cost."
+            else:
+                msg = "Choose an event to see its inventory cost."
+            self._empty = QLabel(msg)
+            self._empty.setStyleSheet("color:#8895A0; font-size:13px; padding:10px;")
+            self._cost_layout.addWidget(self._empty)
             self._cost_layout.addStretch(1)
             return
         for line in lines:
@@ -456,18 +523,101 @@ class LogEventDialog(QDialog):
         self._rows.append({"line": line, "spin": spin, "base": base})
         return row
 
+    def _add_custom_row(self) -> None:
+        """A custom event's cost line: pick any inventory item and a quantity."""
+        if self._empty is not None:
+            self._empty.hide()
+        row = QWidget()
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(10, 4, 10, 4)
+        lay.setSpacing(10)
+        combo = _dropdown()
+        for it in self.manager.inventory.get_items():
+            combo.addItem(it["name"], it["id"])
+        combo.setPlaceholderText("Choose an item")
+        combo.setCurrentIndex(-1)
+        # Fill the row, but don't size to the longest item name (that added a sideways scrollbar).
+        combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        combo.setMinimumContentsLength(12)
+        combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        spin = QSpinBox()
+        spin.setRange(0, 1000000)
+        spin.setValue(1)
+        spin.setFixedWidth(72)
+        after = QLabel()
+        after.setFixedWidth(130)
+        remove = QPushButton("✕")
+        remove.setFixedWidth(28)
+        remove.setAutoDefault(False)
+        remove.setStyleSheet(  # min-width: the dialog style's button minimum would win
+            "QPushButton { background:transparent; border:none; color:#000000;"
+            " min-width:0px; padding:0px; }"
+            " QPushButton:hover { color:#9A2A1E; }")
+        entry = {"line": {"item_id": None, "item_name": "", "qty": 0},
+                 "spin": spin, "base": 0, "combo": combo, "widget": row}
+
+        def recompute(*_a):
+            item = self.manager.inventory.get_item(combo.currentData())
+            entry["base"] = item["quantity"] if item else 0
+            entry["line"]["item_name"] = combo.currentText()  # for the short-stock warning
+            qty, base = spin.value(), entry["base"]
+            after.setText(f"{max(base - qty, 0)} left of {base}" if item else "")
+            after.setStyleSheet(
+                "font-size:12px; color:%s;" % ("#9A2A1E" if qty > base else "#5A6B72"))
+        combo.currentIndexChanged.connect(recompute)
+        spin.valueChanged.connect(recompute)
+        remove.clicked.connect(lambda: self._remove_custom_row(entry))
+
+        lay.addWidget(combo, 1)
+        lay.addWidget(QLabel("qty"))
+        lay.addWidget(spin)
+        lay.addWidget(after)
+        lay.addWidget(remove)
+        self._rows.append(entry)
+        self._cost_layout.insertWidget(self._cost_layout.count() - 1, row)  # above the stretch
+
+    def _remove_custom_row(self, entry) -> None:
+        entry["widget"].hide()
+        entry["widget"].deleteLater()
+        self._rows = [r for r in self._rows if r is not entry]
+        if not self._rows and self._empty is not None:
+            self._empty.show()
+
     def _collect_lines(self) -> list:
-        lines = []
+        lines, by_item = [], {}
         for r in self._rows:
             line = dict(r["line"])
+            if "combo" in r:
+                line["item_id"] = r["combo"].currentData()
+                line["item_name"] = r["combo"].currentText()
             line["qty"] = r["spin"].value()
+            if "combo" in r and line["item_id"] in by_item:  # same item twice: one line
+                by_item[line["item_id"]]["qty"] += line["qty"]
+                continue
+            by_item.setdefault(line["item_id"], line)
             lines.append(line)
         return lines
 
     # ----------------------------------------------------------- Save/Del
     def _on_save(self):
-        if not self.editing and self.type_combo.currentIndex() < 0:
-            QMessageBox.warning(self, "Event required", "Please choose an event.")
+        chosen = None
+        if not self.editing:
+            _match_case(self.type_combo)
+            self._on_event_text()
+            chosen = self._chosen()
+            name = self.type_combo.currentText().strip()
+            if chosen is None:
+                QMessageBox.warning(self, "Event required",
+                                    "Please choose an event or type a name.")
+                return
+            if len(name) > 128:
+                QMessageBox.warning(self, "Name too long",
+                                    "The event name can be at most 128 characters.")
+                return
+        if any("combo" in r and r["combo"].currentIndex() < 0 for r in self._rows):
+            QMessageBox.warning(self, "Item missing",
+                                "Choose an item for each row, or remove the empty row.")
             return
         lines = self._collect_lines()
         # When editing, only rewrite the costs if a quantity changed: otherwise
@@ -490,10 +640,11 @@ class LogEventDialog(QDialog):
         if self.editing:
             self.manager.update_log(self.log["id"], person, comment, event_date,
                                     cost_lines=lines if costs_changed else None)
+        elif chosen == "custom":
+            self.manager.log_event(None, name, person, comment, event_date, lines)
         else:
-            tid = self.type_combo.currentData()
-            tname = self.manager.get_type(tid)["name"]
-            self.manager.log_event(tid, tname, person, comment, event_date, lines)
+            self.manager.log_event(chosen["id"], chosen["name"], person, comment,
+                                   event_date, lines)
         self.saved = True
         self.accept()
 
@@ -743,12 +894,7 @@ class EventTypeDialog(QDialog):
         root.addWidget(scroll, 1)
 
         add_line = QPushButton("+  Add item cost")
-        add_line.setStyleSheet(
-            "QPushButton { background:#EEF4F6; color:#000000; border:1px solid #D8E2E8;"
-            " border-radius:3px; padding:6px 14px; font-size:12px; font-weight:600;"
-            " min-width:0px; }"
-            " QPushButton:hover { background:#DCEBEB; border-color:#8FCFCF; }"
-            " QPushButton:pressed { background:#CBE3E3; }")
+        add_line.setStyleSheet(_ADD_LINE_BTN)
         add_line.setCursor(Qt.CursorShape.PointingHandCursor)
         add_line.clicked.connect(lambda: self._add_cost_row())
         root.addWidget(add_line, 0, Qt.AlignmentFlag.AlignLeft)

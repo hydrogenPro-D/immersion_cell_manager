@@ -26,6 +26,7 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor
 
 from src.gui.styles.dialog_styles import DIALOG_STYLE
+from src.gui.widgets.drag_move import DragMoveMixin
 
 
 _EXTRA_STYLE = """
@@ -140,7 +141,7 @@ _EXTRA_STYLE = """
 """
 
 
-class ConfirmDialog(QDialog):
+class ConfirmDialog(DragMoveMixin, QDialog):
     """Confirmation dialog styled to match :class:`EditRowDialog`."""
 
     def __init__(
@@ -299,21 +300,6 @@ class ConfirmDialog(QDialog):
     def _finish(self, choice: str) -> None:
         self.choice = choice
         self.accept()
-
-    # ---------------------------------------------------- Window dragging
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_pos = (
-                event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            )
-            event.accept()
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if event.buttons() & Qt.MouseButton.LeftButton and hasattr(self, "_drag_pos"):
-            self.move(event.globalPosition().toPoint() - self._drag_pos)
-            event.accept()
-        super().mouseMoveEvent(event)
 
     # ---------------------------------------------------- Convenience API
     @classmethod

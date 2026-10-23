@@ -23,9 +23,10 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 
 from src.gui.styles.dialog_styles import DIALOG_STYLE
+from src.gui.widgets.drag_move import DragMoveMixin
 
 
-class EpisodeInfoDialog(QDialog):
+class EpisodeInfoDialog(DragMoveMixin, QDialog):
     """A modal, read-only details view for a single timeline episode."""
 
     # Internal keys (plus ones merged/omitted below) never shown as their own row.
@@ -322,22 +323,5 @@ class EpisodeInfoDialog(QDialog):
             return f"{date} {int(hour):02d}:00" if hour else date
         except ValueError:
             return date
-
-    # ---------------------------------------------------- Window dragging
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_pos = (
-                event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            )
-            event.accept()
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if event.buttons() & Qt.MouseButton.LeftButton and hasattr(
-            self, "_drag_pos"
-        ):
-            self.move(event.globalPosition().toPoint() - self._drag_pos)
-            event.accept()
-        super().mouseMoveEvent(event)
 
 

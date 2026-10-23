@@ -31,6 +31,7 @@ from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QColor, QPixmap, QIcon
 
 from src.gui.styles.dialog_styles import DIALOG_STYLE
+from src.gui.widgets.drag_move import DragMoveMixin
 from src.data.projects_manager import DEFAULT_PROJECT_COLOR, COLOR_PALETTE
 
 
@@ -66,7 +67,7 @@ def _swatch(hex_color: str, size: int = 16) -> QIcon:
     return QIcon(pix)
 
 
-class ProjectsAdminDialog(QDialog):
+class ProjectsAdminDialog(DragMoveMixin, QDialog):
     """Add/edit/remove projects with a list + inline detail panel."""
 
     def __init__(self, projects_manager, parent=None, on_remove=None,
@@ -510,20 +511,3 @@ class ProjectsAdminDialog(QDialog):
             self._remove_callback(name)  # refresh the app's project combos
         # Still in the archived view: the restored project drops out of the list.
         self._reload()
-
-    # ---------------------------------------------------- Window dragging
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_pos = (
-                event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            )
-            event.accept()
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if event.buttons() & Qt.MouseButton.LeftButton and hasattr(
-            self, "_drag_pos"
-        ):
-            self.move(event.globalPosition().toPoint() - self._drag_pos)
-            event.accept()
-        super().mouseMoveEvent(event)

@@ -317,6 +317,7 @@ class CalendarDateTimeEdit(QWidget):
         self.time_edit.setEnabled(enabled)
 
 from src.gui.styles.dialog_styles import DIALOG_STYLE
+from src.gui.widgets.drag_move import DragMoveMixin
 from src.gui.widgets.field_types import FieldSpec, FieldType
 from src.gui.widgets.pill_combo_box import PillComboBox
 from src.gui.widgets.projects_admin_dialog import ProjectsAdminDialog
@@ -330,7 +331,7 @@ class ScrollablePillComboBox(PillComboBox):
         self.parent().wheelEvent(event)
 
 
-class EditRowDialog(QDialog):
+class EditRowDialog(DragMoveMixin, QDialog):
     """Dialog for editing or adding a row in the Immersion Cells table"""
 
     # Signal emitted when row is saved with the updated row data
@@ -1253,16 +1254,3 @@ class EditRowDialog(QDialog):
         if isinstance(editor, QLineEdit):
             return editor.text()
         return ""
-
-    # ---------------------------------------------------- Window dragging
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            event.accept()
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if event.buttons() & Qt.MouseButton.LeftButton and hasattr(self, "_drag_pos"):
-            self.move(event.globalPosition().toPoint() - self._drag_pos)
-            event.accept()
-        super().mouseMoveEvent(event)

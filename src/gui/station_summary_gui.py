@@ -340,12 +340,20 @@ class StationSummary(QWidget):
             original or str(data.get("original_data_filename", "") or "")
         )
         channel = (values.get("channel") or "").strip()
+        try:
+            restore = self._reopen_restores_cell(episode_id, data, values)
+        except ValueError as refused:
+            QMessageBox.warning(self, "Cannot set to In use", str(refused))
+            return
         print(f"[MODIFY] updating episode id={episode_id} channel={channel!r} "
               f"values={values}")
         changes = self._episode_changes(data, values)
         if self.manager.update_episode(episode_id, values):
             print(f"[MODIFY] episode id={episode_id} updated OK")
-            self._sync_live_cell(channel, data, row_data[:len(cols)])
+            if restore:
+                self._restore_cell(channel, row_data[:len(cols)])
+            else:
+                self._sync_live_cell(channel, data, row_data[:len(cols)])
             self.reload_data()
             self._show_changes_dialog(channel, changes)
             new_status = (values.get("status") or "").strip().lower()
@@ -386,6 +394,46 @@ class StationSummary(QWidget):
             button_text="OK", destructive=False, icon="↩️",
             subtitle="Nothing was added to the IC Logbook.")
         self._modify_episode(episode)
+
+    def _reopen_restores_cell(self, episode_id, data: dict, values: dict) -> bool:
+        """True if saving this episode as In use must put it back into its freed
+        cell. Raises ValueError (the message to show) if the cell can't take it."""
+        if (values.get("status") or "").strip().lower() != "in use":
+            return False
+        channel = (data.get("channel") or "").strip()
+        cell = self.cells_manager.get_cell_by_channel(channel)
+        filename = (data.get("data_filename") or "").strip()
+        if filename and (cell.get("data_filename") or "").strip() == filename:
+            return False  # the cell still holds it: _sync_live_cell mirrors the edit
+        status = (cell.get("status") or "").strip()
+        latest = self.manager.latest_episode_id(channel) == int(episode_id)
+        if cell and latest and status.lower() in ("", "available"):
+            return True
+        if (data.get("status") or "").strip().lower() == "in use":
+            return False  # already In use here (old data): save as before
+        if not cell:
+            raise ValueError(f"Channel {channel} no longer exists in Cells mapping.")
+        if not latest:
+            raise ValueError(f"Only the latest experiment on channel {channel} "
+                             "can be set back to In use.")
+        held = cell.get("data_filename") or ""
+        raise ValueError(
+            f"Channel {channel} is currently {status}"
+            + (f" with {held}" if held else "") + ".\n\n"
+            "Free the cell in Cells mapping first, then set this experiment back to In use.")
+
+    def _restore_cell(self, channel: str, cell_row: list) -> None:
+        """Put a reopened experiment back into its (free) cell."""
+        try:
+            self.cells_manager.update_row_by_channel(cell_row)
+        except Exception as e:
+            QMessageBox.warning(
+                self, "Cell not updated",
+                f"The experiment is In use again, but channel {channel} in Cells "
+                f"mapping could not be updated.\n\n{e}")
+            return
+        if callable(self.on_cells_changed):
+            self.on_cells_changed()
 
     def _sync_live_cell(self, channel: str, data: dict, cell_row: list) -> None:
         """Mirror the edit onto the channel's cell when this is its live episode.

@@ -22,9 +22,10 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 
 from src.gui.styles.dialog_styles import DIALOG_STYLE
+from src.gui.widgets.drag_move import DragMoveMixin
 
 
-class ChangesDialog(QDialog):
+class ChangesDialog(DragMoveMixin, QDialog):
     """Read-only summary of what changed on an episode (field: old → new)."""
 
     _STYLE = """
@@ -174,20 +175,3 @@ class ChangesDialog(QDialog):
             value, 1, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
         return row
-
-    # ---------------------------------------------------- Window dragging
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_pos = (
-                event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            )
-            event.accept()
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if event.buttons() & Qt.MouseButton.LeftButton and hasattr(
-            self, "_drag_pos"
-        ):
-            self.move(event.globalPosition().toPoint() - self._drag_pos)
-            event.accept()
-        super().mouseMoveEvent(event)

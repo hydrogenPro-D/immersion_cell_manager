@@ -18,6 +18,7 @@ from PyQt6.QtGui import QColor, QRegularExpressionValidator
 
 from src.gui.styles.tab_styles import TAB_STYLE
 from src.gui.styles.dialog_styles import DIALOG_STYLE
+from src.gui.widgets.drag_move import DragMoveMixin
 from src.gui.widgets.confirm_dialog import ConfirmDialog
 from src.gui.widgets.edit_row_dialog import CalendarDateEdit, ProjectComboBox
 from src.gui.widgets.hover_border_table import HoverBorderTable, HOVER_TABLE_STYLE
@@ -682,7 +683,7 @@ class LogbookTab(QWidget):
         self._sync_toolbar()
 
 
-class ScoreboardDialog(QDialog):
+class ScoreboardDialog(DragMoveMixin, QDialog):
     """Add / edit a scoreboard snapshot.
 
     Only the two manual values (Total testing time, Number of ICs) are editable;
@@ -839,20 +840,8 @@ class ScoreboardDialog(QDialog):
             self.deleted = True
             self.accept()
 
-    # ---------------------------------------------------- Window dragging
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_pos = (
-                event.globalPosition().toPoint() - self.frameGeometry().topLeft())
-        super().mousePressEvent(event)
 
-    def mouseMoveEvent(self, event):
-        if event.buttons() & Qt.MouseButton.LeftButton and hasattr(self, "_drag_pos"):
-            self.move(event.globalPosition().toPoint() - self._drag_pos)
-        super().mouseMoveEvent(event)
-
-
-class ExperimentDialog(QDialog):
+class ExperimentDialog(DragMoveMixin, QDialog):
     """Add / edit a logbook experiment (Delete and Move live inside, in edit mode).
 
     Fields follow the project's columns (``columns``: callable project ->
@@ -1236,15 +1225,3 @@ class ExperimentDialog(QDialog):
         ):
             self.deleted = True
             self.accept()
-
-    # ---------------------------------------------------- Window dragging
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_pos = (
-                event.globalPosition().toPoint() - self.frameGeometry().topLeft())
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if event.buttons() & Qt.MouseButton.LeftButton and hasattr(self, "_drag_pos"):
-            self.move(event.globalPosition().toPoint() - self._drag_pos)
-        super().mouseMoveEvent(event)
