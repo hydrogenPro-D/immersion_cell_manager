@@ -83,6 +83,27 @@ def to_param(value):
     return value
 
 
+def hours_text(value) -> str:
+    """A FLOAT hours value as text without trailing zeros (500.0 -> "500")."""
+    if value is None or value == "":
+        return ""
+    try:
+        return f"{float(value):f}".rstrip("0").rstrip(".")
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def hours_param(value):
+    """Hours text ("500", "12,5") as a float parameter; blank or invalid -> None."""
+    value = to_param(value)
+    if value is None:
+        return None
+    try:
+        return float(str(value).replace(",", "."))
+    except ValueError:
+        return None
+
+
 def _find_driver_installer() -> Path | None:
     """Return the bundled ODBC driver installer, or None if not present."""
     if not _DRIVER_DIR.is_dir():
@@ -154,6 +175,7 @@ class Database:
         self._conn = None
         self._last_used = 0.0
         self._write_listeners = []  # called with the proc name after each write
+        self._columns_seen = {}  # (table, column) -> exists, for has_column
 
     # ------------------------------------------------------ config / connect
     def _load_config(self) -> dict:
@@ -248,6 +270,17 @@ class Database:
     def fetch_row(self, sql: str, params=()) -> dict | None:
         rows = self.fetch_all(sql, params)
         return rows[0] if rows else None
+
+    def has_column(self, table: str, column: str) -> bool:
+        """True if ``icm.<table>`` has ``column`` (cached: a migration needs an app restart)."""
+        key = (table, column)
+        if key not in self._columns_seen:
+            try:
+                row = self.fetch_row("SELECT COL_LENGTH(?, ?) AS n", (f"icm.{table}", column))
+            except DatabaseError:
+                return False  # unknown for now; ask again next time
+            self._columns_seen[key] = bool(row and row.get("n") is not None)
+        return self._columns_seen[key]
 
     def exec_proc(self, proc: str, params: dict = None, returns_id: bool = False):
         """Call an ``icm.usp_*`` procedure with named parameters.

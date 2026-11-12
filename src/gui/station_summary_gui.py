@@ -319,9 +319,7 @@ class StationSummary(QWidget):
         values = {}
         for i, display in enumerate(cols):
             key = mapping.get(display)
-            # density/fe_ppm are derived, read-only project columns, not history
-            # fields (usp_history_update has no such params).
-            if not key or key in ("duration", "density", "fe_ppm"):
+            if not key or key == "duration":
                 continue
             values[key] = row_data[i] if i < len(row_data) else ""
         # Fields absent from the cell columns: keep the episode's own values.
@@ -459,11 +457,15 @@ class StationSummary(QWidget):
     # read-only; id / original_data_filename are internal).
     _CHANGE_LABELS = [
         ("project_id", "Project ID"),
+        ("density", "Density [g/L]"),
+        ("fe_ppm", "Fe [ppm]"),
         ("current_owner", "Current owner"),
         ("assembled_by", "Assembled by"),
         ("status", "Status"),
         ("start_date", "Start date"),
         ("start_hour", "Start hour"),
+        ("test_length_h", "Test length [h]"),
+        ("protocol", "Protocol"),
         ("end_date", "End date"),
         ("expected_end_date", "Expected end date"),
         ("cathode", "Cathode"),

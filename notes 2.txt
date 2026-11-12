@@ -66,7 +66,7 @@ urgency:
 approval: this is for Balázs
 
 új field:
-channel: fixed vagy valahova
+channel: fixed vagy valahovat
 
 you can modify stuf. you can approve it.
 

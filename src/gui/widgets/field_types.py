@@ -14,6 +14,7 @@ class FieldType(Enum):
     DATE = "date"          # ISO yyyy-MM-dd (with an hours picker)
     DATE_ONLY = "date_only"  # ISO yyyy-MM-dd, optional (can be left blank)
     CHOICE = "choice"      # one-of from FieldSpec.choices
+    SUGGEST = "suggest"    # free text; FieldSpec.choices offered as a dropdown
 
 
 # Returns (background_hex, foreground_hex) for a given value.
