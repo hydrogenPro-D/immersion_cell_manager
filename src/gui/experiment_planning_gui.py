@@ -119,6 +119,51 @@ def busy_text(channel: str, cell) -> str:
     return f"Channel {channel} is not available ({status or 'no status'})."
 
 
+_DOT_COLORS = {"Available": "#2E9E57", "In use": "#2F6FC0",
+               "In repair": "#E04134", "Test finished": "#1A8C8C"}
+
+
+def status_dot(status: str, reserved: bool) -> QIcon:
+    """A dot in the status color; an amber ring when another plan reserved the channel."""
+    pix = QPixmap(14, 14)
+    pix.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(Qt.PenStyle.NoPen)
+    if reserved:
+        painter.setBrush(QColor("#F59E0B"))
+        painter.drawEllipse(0, 0, 14, 14)
+        painter.setBrush(QColor("#FFFFFF"))
+        painter.drawEllipse(2, 2, 10, 10)
+    painter.setBrush(QColor(_DOT_COLORS.get(status, "#9AA8B2")))
+    painter.drawEllipse(3, 3, 8, 8)
+    painter.end()
+    return QIcon(pix)
+
+
+def channel_choices(cells: list, scheduled: list, plan_id=None) -> list:
+    """[(channel, label, icon)] for the Channel dropdown: each channel's status,
+    and who reserved it among the other scheduled plans."""
+    reserved = {}
+    for p in scheduled:
+        if p.get("channel") and p.get("id") != plan_id:
+            reserved.setdefault(p["channel"], []).append(p.get("name") or "a plan")
+    out = []
+    for c in cells:
+        ch = c.get("channel")
+        if not ch:
+            continue
+        status = (c.get("status") or "").strip()
+        label = status or "No status"
+        end = (c.get("expected_end_date") or "")[:10]
+        if status.lower() == "in use" and end:
+            label += f", ends {end}"
+        if ch in reserved:
+            label += f", reserved for {', '.join(reserved[ch])}"
+        out.append((ch, f"{ch}   {label}", status_dot(status, ch in reserved)))
+    return out
+
+
 def grip_icon() -> QIcon:
     """Six dots (like the ⠿ grip in Add project): this row can be dragged."""
     pix = QPixmap(10, 16)
@@ -137,7 +182,7 @@ def grip_icon() -> QIcon:
 # ------------------------------------------------------------------ Form fields
 class PlanFields(QWidget):
     """The plan's input rows (label left, field right). ``channels`` adds the
-    Channel row (approval and schedule only)."""
+    Channel row (approval and schedule only), as from :func:`channel_choices`."""
 
     def __init__(self, projects: list, protocols: list, channels: list = None, parent=None):
         super().__init__(parent)
@@ -170,7 +215,10 @@ class PlanFields(QWidget):
                 ("Aim", self.aim), ("Urgency", self.urgency)]
         self.channel = None
         if channels is not None:
-            self.channel = _dropdown([ANY_CELL] + channels, editable=False)
+            self.channel = _dropdown([], editable=False)
+            self.channel.addItem(ANY_CELL, "")
+            for ch, label, icon in channels:
+                self.channel.addItem(icon, label, ch)
             rows.append(("Channel", self.channel))
         for label, widget in rows:
             lay.addWidget(_form_row(label, widget, top=widget is self.aim))
@@ -190,7 +238,12 @@ class PlanFields(QWidget):
         _select(self.urgency, plan.get("urgency") or "Normal")
         self.aim.setPlainText(plan.get("aim", ""))
         if self.channel is not None:
-            _select(self.channel, plan.get("channel") or ANY_CELL)
+            ch = plan.get("channel") or ""
+            idx = self.channel.findData(ch)
+            if idx < 0:  # a channel that was removed since
+                self.channel.addItem(status_dot("", False), f"{ch}   No longer exists", ch)
+                idx = self.channel.count() - 1
+            self.channel.setCurrentIndex(idx)
 
     def values(self) -> dict:
         v = {
@@ -204,8 +257,7 @@ class PlanFields(QWidget):
             "urgency": self.urgency.currentText(),
         }
         if self.channel is not None:
-            ch = self.channel.currentText()
-            v["channel"] = "" if ch == ANY_CELL else ch
+            v["channel"] = self.channel.currentData() or ""
         return v
 
     def _project_name(self, text: str) -> str:
@@ -406,6 +458,8 @@ class PlanDialog(QDialog):
             buttons.addWidget(self._button("Delete", "delete", _DANGER))
         if mode == "scheduled":
             buttons.addWidget(self._button("Back to pending", "unapprove"))
+        if mode != "new":
+            buttons.addWidget(self._button("Duplicate", "duplicate"))
         buttons.addStretch(1)
         cancel = QPushButton("Cancel")
         cancel.setAutoDefault(False)
@@ -435,7 +489,7 @@ class PlanDialog(QDialog):
         return self.fields.values() != self._initial
 
     def _finish(self, action: str) -> None:
-        if action != "delete":
+        if action not in ("delete", "duplicate"):  # the copy is checked when submitted
             problem = self.fields.problem()
             if problem:
                 QMessageBox.warning(self, "Plan", problem)
@@ -493,7 +547,7 @@ class ExperimentPlanningTab(QWidget):
         self.add_btn = QPushButton("＋  Add new plan")
         self.add_btn.setStyleSheet(_PRIMARY)
         self.add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.add_btn.clicked.connect(self._add_plan)
+        self.add_btn.clicked.connect(lambda: self._add_plan())
         bar.addWidget(self.add_btn)
         bar.addSpacing(16)
         # Filters apply to both lists.
@@ -730,8 +784,9 @@ class ExperimentPlanningTab(QWidget):
         pm = self.cells_manager.get_projects_manager()
         return sorted(pm.get_projects(), key=str.casefold)
 
-    def _channels(self) -> list:
-        return [c["channel"] for c in self.cells_manager.load_all_cells() if c.get("channel")]
+    def _channels(self, plan_id=None) -> list:
+        return channel_choices(self.cells_manager.load_all_cells(),
+                               self.manager.get_scheduled(), plan_id)
 
     def _all_protocols(self) -> list:
         seen, out = set(), []
@@ -742,8 +797,10 @@ class ExperimentPlanningTab(QWidget):
         return out
 
     # ------------------------------------------------------------ New plan
-    def _add_plan(self) -> None:
-        dlg = PlanDialog(self, {}, "new", self._projects(), self._all_protocols())
+    def _add_plan(self, copy_of: dict = None) -> None:
+        """A new plan, blank or filled from ``copy_of`` (Duplicate; no channel)."""
+        start = {k: v for k, v in (copy_of or {}).items() if k != "channel"}
+        dlg = PlanDialog(self, start, "new", self._projects(), self._all_protocols())
         dlg.exec()
         if dlg.action != "submit":
             return
@@ -762,11 +819,14 @@ class ExperimentPlanningTab(QWidget):
             self.reload()
             return
         dlg = PlanDialog(self, plan, "scheduled" if scheduled else "pending",
-                         self._projects(), self._all_protocols(), self._channels())
+                         self._projects(), self._all_protocols(), self._channels(plan["id"]))
         dlg.exec()
         if dlg.action is None:
             return
         values, pid = dlg.fields.values(), plan["id"]
+        if dlg.action == "duplicate":
+            self._add_plan(values)
+            return
         if dlg.action == "delete":
             if ConfirmDialog.ask(self, title="Delete plan",
                                  message=f"Delete the plan requested by <b>{plan['name']}</b>?",

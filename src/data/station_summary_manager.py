@@ -8,7 +8,7 @@ with bars built from episodes in ``icm.channel_history``. Reads via ``SELECT``;
 from datetime import datetime, timedelta, date
 from math import ceil
 
-from src.data.db import get_db, DatabaseError, to_text, to_param
+from src.data.db import get_db, DatabaseError, to_text, to_param, hours_text, hours_param
 from src.data.enums import CellStatus
 from src.data.projects_manager import ProjectsManager
 
@@ -19,6 +19,9 @@ HISTORY_COLUMNS = [
     "anode", "data_filename", "original_data_filename", "added_water_b",
     "comments", "separator",
 ]
+# Added by migrations 024 and 026.
+HISTORY_COLUMNS_024 = ["density", "fe_ppm", "test_length_h"]
+HISTORY_COLUMNS_026 = ["protocol"]
 
 
 class StationSummaryManager:
@@ -35,6 +38,42 @@ class StationSummaryManager:
         # Project colors drive the bar colors in the timeline.
         self.projects_manager = ProjectsManager(self._db)
 
+    def _has_024(self) -> bool:
+        return self._db.has_column("channel_history", "test_length_h")
+
+    def _has_026(self) -> bool:
+        return self._db.has_column("channel_history", "protocol")
+
+    def _columns(self) -> list:
+        """The icm.channel_history columns this database has."""
+        return (HISTORY_COLUMNS + (HISTORY_COLUMNS_024 if self._has_024() else [])
+                + (HISTORY_COLUMNS_026 if self._has_026() else []))
+
+    def _entry(self, row: dict) -> dict:
+        entry = {k: to_text(row.get(k)) for k in self._columns()}
+        if "test_length_h" in entry:
+            entry["test_length_h"] = hours_text(row.get("test_length_h"))
+        return entry
+
+    def _params(self, values: dict) -> dict:
+        """Proc parameters: blanks -> NULL, typed start hour and test length,
+        and no 024 fields on a database without them."""
+        params = {k: to_param(v) for k, v in values.items()}
+        if not self._has_024():
+            for k in HISTORY_COLUMNS_024:
+                params.pop(k, None)
+        elif "test_length_h" in params:
+            params["test_length_h"] = hours_param(params["test_length_h"])
+        if not self._has_026():
+            for k in HISTORY_COLUMNS_026:
+                params.pop(k, None)
+        if params.get("start_hour") is not None:
+            try:
+                params["start_hour"] = int(params["start_hour"])
+            except (ValueError, TypeError):
+                params["start_hour"] = None
+        return params
+
     # ----------------------------------------------------------- Public API
     def get_channel_history(self) -> list:
         """Return ``[{"channel", "status", "episodes": [episode, ...]}, ...]``.
@@ -47,7 +86,7 @@ class StationSummaryManager:
             "SELECT channel, status FROM icm.cells ORDER BY id"
         )
 
-        columns = ", ".join(HISTORY_COLUMNS)
+        columns = ", ".join(self._columns())
         episode_rows = self._db.fetch_all(
             f"SELECT {columns} FROM icm.channel_history "
             "ORDER BY channel, start_date, id"
@@ -55,7 +94,7 @@ class StationSummaryManager:
 
         by_channel: dict[str, list] = {}
         for r in episode_rows:
-            entry = {k: to_text(r.get(k)) for k in HISTORY_COLUMNS}
+            entry = self._entry(r)
             episode = self._normalize_episode(entry)
             if episode is not None:
                 by_channel.setdefault(entry["channel"], []).append(episode)
@@ -174,26 +213,28 @@ class StationSummaryManager:
         else:
             existing_id = self._find_episode_id(channel, filename)
 
-        params = {
+        params = self._params({
             "channel": channel,
-            "project_id": to_param(field("Project ID", "project_id")),
-            "current_owner": to_param(field("Current owner", "current_owner")),
-            "assembled_by": to_param(field("Assembled by", "assembled_by")),
-            "status": to_param(field("Status", "status")),
+            "project_id": field("Project ID", "project_id"),
+            "density": field("Density [g/L]", "density"),
+            "fe_ppm": field("Fe [ppm]", "fe_ppm"),
+            "current_owner": field("Current owner", "current_owner"),
+            "assembled_by": field("Assembled by", "assembled_by"),
+            "status": field("Status", "status"),
             "start_date": start_date.strftime(self.DATE_FORMAT),
             "start_hour": start_hour,
+            "test_length_h": field("Test length [h]", "test_length_h"),
+            "protocol": field("Protocol", "protocol"),
             "end_date": end_date.strftime(self.DATE_FORMAT),
-            "expected_end_date": to_param(
-                field("Expected end date", "expected_end_date")
-            ),
-            "cathode": to_param(field("Cathode", "cathode")),
-            "anode": to_param(field("Anode", "anode")),
-            "data_filename": to_param(filename),
-            "original_data_filename": to_param(original or filename),
-            "added_water_b": to_param(field("Added water by timing", "added_water_b")),
-            "comments": to_param(field("Comments", "comments")),
-            "separator": to_param(field("Separator", "separator")),
-        }
+            "expected_end_date": field("Expected end date", "expected_end_date"),
+            "cathode": field("Cathode", "cathode"),
+            "anode": field("Anode", "anode"),
+            "data_filename": filename,
+            "original_data_filename": original or filename,
+            "added_water_b": field("Added water by timing", "added_water_b"),
+            "comments": field("Comments", "comments"),
+            "separator": field("Separator", "separator"),
+        })
 
         try:
             if existing_id is not None:
@@ -209,13 +250,8 @@ class StationSummaryManager:
         ``values`` is keyed by the proc's parameter names; empty strings become
         NULL and ``start_hour`` is coerced to an int.
         """
-        params = {k: to_param(v) for k, v in values.items()}
+        params = self._params(values)
         params["id"] = int(episode_id)
-        if params.get("start_hour") is not None:
-            try:
-                params["start_hour"] = int(params["start_hour"])
-            except (ValueError, TypeError):
-                params["start_hour"] = None
         try:
             self._db.exec_proc("usp_history_update", params)
             return True
@@ -265,24 +301,18 @@ class StationSummaryManager:
         episode_id = self._find_episode_id(channel, filename)
         if episode_id is None:
             return
-        columns = ", ".join(HISTORY_COLUMNS)
+        columns = ", ".join(self._columns())
         row = self._db.fetch_row(
             f"SELECT {columns} FROM icm.channel_history WHERE id = ?", (episode_id,)
         )
         if not row:
             return
-        params = {k: to_param(to_text(row.get(k))) for k in HISTORY_COLUMNS}
+        params = self._params(self._entry(row))
         params["id"] = episode_id
         params["status"] = CellStatus.TEST_FINISHED.value
         # The experiment ended now: freeze the actual end_date at today (until
         # this, an ongoing bar was extended to today only at render time).
         params["end_date"] = date.today().strftime(self.DATE_FORMAT)
-        # start_hour is a TINYINT param: coerce the string back to int (or None).
-        if params.get("start_hour") is not None:
-            try:
-                params["start_hour"] = int(params["start_hour"])
-            except (ValueError, TypeError):
-                params["start_hour"] = None
         try:
             self._db.exec_proc("usp_history_update", params)
         except DatabaseError:

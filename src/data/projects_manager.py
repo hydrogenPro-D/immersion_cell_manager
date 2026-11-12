@@ -25,7 +25,10 @@ COLOR_PALETTE = [
 # events would fire a SELECT round-trip to the database. The cache is cleared
 # on any local write (below) and by the GUI when the change poller detects an
 # external change, so it never serves stale colors for long.
-_rows_cache: list[tuple[str, str, str, str, str, bool]] | None = None
+_rows_cache: list[dict] | None = None
+
+# Optional columns, newest first; a database without one is read without it.
+_OPTIONAL_COLUMNS = ["owner", "is_archived", "density", "fe_ppm"]
 
 
 def invalidate_projects_cache() -> None:
@@ -41,66 +44,70 @@ class ProjectsManager:
         self._db = db or get_db()
 
     # ------------------------------------------------------------------ IO
-    def _rows(self) -> list[tuple[str, str, str, str, str, bool]]:
-        """Return ``[(name, color, description, density, fe_ppm, is_archived), ...]``."""
+    def _rows(self) -> list[dict]:
+        """``[{name, color, description, density, fe_ppm, owner, is_archived}, ...]``"""
         global _rows_cache
         if _rows_cache is not None:
             return _rows_cache
-        try:
-            records = self._db.fetch_all(
-                "SELECT project_id, color, description, density, fe_ppm, is_archived "
-                "FROM icm.projects ORDER BY id"
-            )
-        except DatabaseError:
+        optional = list(_OPTIONAL_COLUMNS)
+        while True:
+            columns = ", ".join(["project_id", "color", "description"] + optional)
             try:
-                # is_archived not migrated yet (016), read without it.
-                records = self._db.fetch_all(
-                    "SELECT project_id, color, description, density, fe_ppm "
-                    "FROM icm.projects ORDER BY id"
-                )
+                records = self._db.fetch_all(f"SELECT {columns} FROM icm.projects ORDER BY id")
+                break
             except DatabaseError:
-                # density/fe_ppm not migrated yet (015) either.
-                records = self._db.fetch_all(
-                    "SELECT project_id, color, description FROM icm.projects ORDER BY id"
-                )
-        rows: list[tuple[str, str, str, str, str, bool]] = []
+                if not optional:
+                    raise
+                optional.pop(0)  # not migrated yet: retry without the newest column
+        rows = []
         for i, r in enumerate(records):
             name = to_text(r.get("project_id")).strip()
             if not name:
                 continue
-            color = to_text(r.get("color")).strip() or COLOR_PALETTE[i % len(COLOR_PALETTE)]
-            description = to_text(r.get("description")).strip()
-            density = to_text(r.get("density")).strip()
-            fe_ppm = to_text(r.get("fe_ppm")).strip()
-            is_archived = bool(r.get("is_archived"))
-            rows.append((name, color, description, density, fe_ppm, is_archived))
+            rows.append({
+                "name": name,
+                "color": to_text(r.get("color")).strip() or COLOR_PALETTE[i % len(COLOR_PALETTE)],
+                "description": to_text(r.get("description")).strip(),
+                "density": to_text(r.get("density")).strip(),
+                "fe_ppm": to_text(r.get("fe_ppm")).strip(),
+                "owner": to_text(r.get("owner")).strip(),
+                "is_archived": bool(r.get("is_archived")),
+            })
         _rows_cache = rows
         return rows
+
+    def _by_name(self, key: str) -> dict[str, str]:
+        """``{project_name: row[key]}`` for all projects (archived included)."""
+        return {r["name"]: r[key] for r in self._rows()}
 
     # ----------------------------------------------------------- Public API
     def get_projects(self) -> list[str]:
         """Active (non-archived) project names, the ones assignable to channels."""
-        return [name for name, _, _, _, _, archived in self._rows() if not archived]
+        return [r["name"] for r in self._rows() if not r["is_archived"]]
 
     def get_archived_projects(self) -> list[str]:
         """Archived project names (kept on existing channels, not assignable)."""
-        return [name for name, _, _, _, _, archived in self._rows() if archived]
+        return [r["name"] for r in self._rows() if r["is_archived"]]
 
     def get_project_colors(self) -> dict[str, str]:
-        """``{project_name: color_hex}`` for all projects (archived included)."""
-        return {name: color for name, color, _, _, _, _ in self._rows()}
+        return self._by_name("color")
 
     def get_project_descriptions(self) -> dict[str, str]:
-        """``{project_name: description}`` for all projects (archived included)."""
-        return {name: description for name, _, description, _, _, _ in self._rows()}
+        return self._by_name("description")
 
     def get_project_densities(self) -> dict[str, str]:
-        """``{project_name: density}`` for all projects (archived included)."""
-        return {name: density for name, _, _, density, _, _ in self._rows()}
+        return self._by_name("density")
 
     def get_project_fe_ppms(self) -> dict[str, str]:
-        """``{project_name: fe_ppm}`` for all projects (archived included)."""
-        return {name: fe_ppm for name, _, _, _, fe_ppm, _ in self._rows()}
+        return self._by_name("fe_ppm")
+
+    def get_owner(self, name: str) -> str:
+        """Return the project owner for ``name`` (or empty string)."""
+        return self._by_name("owner").get((name or "").strip(), "")
+
+    def has_owner_column(self) -> bool:
+        """True once migration 025 added projects.owner."""
+        return self._db.has_column("projects", "owner")
 
     def get_description(self, name: str) -> str:
         """Return the description for ``name`` (or empty string if unknown)."""
@@ -131,7 +138,7 @@ class ProjectsManager:
 
     def add_project(self, name: str, color: str | None = None,
                     description: str | None = None, density: str = "",
-                    fe_ppm: str = "") -> bool:
+                    fe_ppm: str = "", owner: str = "") -> bool:
         """Add a project. Returns ``False`` if invalid or it already exists."""
         name = (name or "").strip()
         if not name:
@@ -139,15 +146,33 @@ class ProjectsManager:
         if not color:
             color = COLOR_PALETTE[len(self._rows()) % len(COLOR_PALETTE)]
         description = (description or "").strip()
+        params = {
+            "project_id": name, "color": color, "description": description,
+            "density": (density or "").strip(), "fe_ppm": (fe_ppm or "").strip(),
+        }
+        if self.has_owner_column():
+            params["owner"] = (owner or "").strip()
         try:
-            self._db.exec_proc("usp_project_insert", {
-                "project_id": name, "color": color, "description": description,
-                "density": (density or "").strip(), "fe_ppm": (fe_ppm or "").strip(),
-            })
+            self._db.exec_proc("usp_project_insert", params)
             invalidate_projects_cache()
             return True
         except DatabaseError:
             return False  # most likely the UNIQUE name already exists
+
+    def set_project_owner(self, name: str, owner: str) -> bool:
+        """Set a project's owner (empty string clears). False before migration 025."""
+        name = (name or "").strip()
+        if not name or not self.has_owner_column():
+            return False
+        try:
+            self._db.exec_proc("usp_project_update", {
+                "project_id": name, "color": None, "description": None,
+                "owner": (owner or "").strip(),
+            })
+            invalidate_projects_cache()
+            return True
+        except DatabaseError:
+            return False
 
     def set_project_specs(self, name: str, density: str, fe_ppm: str) -> bool:
         """Set a project's density + fe_ppm (empty string clears; others kept)."""

@@ -66,11 +66,13 @@ class PillDelegate(QStyledItemDelegate):
         # owning table) instead of the cell being filled, so the pill/tint colors
         # keep showing. Used by the cells-mapping table.
         self._row_border_mode = row_border_mode
-        self._hp = h_padding
-        self._vp = v_padding
-        self._radius = radius
-        self._row_pad_x = row_padding_x
-        self._row_pad_y = row_padding_y
+        self._base = (h_padding, v_padding, radius, row_padding_x, row_padding_y)
+        self.set_scale(1.0)
+
+    def set_scale(self, scale: float) -> None:
+        """Scale the paddings and corner radius (table zoom)."""
+        self._hp, self._vp, self._radius, self._row_pad_x, self._row_pad_y = (
+            max(1, round(v * scale)) for v in self._base)
 
     # ------------------------------------------------------------------
     def sizeHint(self, option: QStyleOptionViewItem, index) -> QSize:  # noqa: N802

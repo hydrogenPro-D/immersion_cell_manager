@@ -1,11 +1,11 @@
-from PyQt6.QtCore import Qt, QEvent
-from PyQt6.QtGui import QColor, QBrush
+from PyQt6.QtCore import Qt, QEvent, QRect, QSize, QTimer
+from PyQt6.QtGui import QColor, QBrush, QPen
 import re
 
 from PyQt6.QtWidgets import (
     QTableWidget, QTableView, QAbstractItemView, QHeaderView,
     QGraphicsDropShadowEffect, QTableWidgetItem, QStyledItemDelegate,
-    QStyle, QStyleOptionViewItem,
+    QStyle, QStyleOptionViewItem, QApplication, QLabel,
 )
 
 from src.gui.styles.table_styles import TABLE_STYLE
@@ -55,6 +55,42 @@ class _RowTintDelegate(QStyledItemDelegate):
         super().paint(painter, opt, index)
         paint_row_border(painter, option, index, hovered=hovered, selected=selected)
 
+
+_COPY_GAP = 8  # px between the text / cell edge and the copy icon
+
+
+def copy_icon_rect(cell: QRect, font_metrics) -> QRect:
+    """Where the copy icon sits: vertically centered at the cell's right end."""
+    s = max(10, font_metrics.height() - 2)
+    return QRect(cell.right() - _COPY_GAP - s, cell.center().y() - s // 2, s, s)
+
+
+class _CopyCellDelegate(_RowTintDelegate):
+    """A plain cell with a copy icon at its right end (non-empty cells only)."""
+
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+        if not (index.data(Qt.ItemDataRole.DisplayRole) or "").strip():
+            return
+        r = copy_icon_rect(option.rect, option.fontMetrics)
+        hot = getattr(self.parent(), "_copy_hover_row", -1) == index.row()
+        painter.save()
+        painter.setRenderHint(painter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor("#3FA3A3" if hot else "#7A8A96"), 1.4))
+        d = max(3, r.width() // 4)  # offset of the back sheet
+        back = QRect(r.left() + d, r.top(), r.width() - d, r.height() - d)
+        front = QRect(r.left(), r.top() + d, r.width() - d, r.height() - d)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(back, 2, 2)
+        painter.setBrush(QColor("#FFFFFF"))
+        painter.drawRoundedRect(front, 2, 2)
+        painter.restore()
+
+    def sizeHint(self, option, index):
+        size = super().sizeHint(option, index)
+        extra = max(10, option.fontMetrics.height() - 2) + 2 * _COPY_GAP
+        return QSize(size.width() + extra, size.height())
+
 # Tooltip shown on the red "!" of a channel whose calibration is too old.
 STALE_CALIBRATION_TOOLTIP = (
     "This channel hasn't been calibrated in over 3 months. Recalibrate it "
@@ -81,10 +117,13 @@ class DataTableWidget(QTableWidget):
     # Extra px added to a wrapped (multi-line) row so the lines aren't cramped.
     MULTILINE_ROW_EXTRA = 4
 
-    # Zoom scales the cell font + row height together.
-    BASE_ROW_HEIGHT = 24
+    # Column whose cells get a click-to-copy icon.
+    COPY_COLUMN = "Data filename"
+
+    # Zoom scales the cell font + row height together (row floor at 100%).
+    BASE_ROW_HEIGHT = 40
     BASE_FONT_PX = 12
-    MIN_ZOOM = 0.7
+    MIN_ZOOM = 0.5
     MAX_ZOOM = 2.0
     ZOOM_STEP = 0.10
 
@@ -98,6 +137,9 @@ class DataTableWidget(QTableWidget):
         # border); re-clicking the selected row deselects it (toggle).
         self._hover_row = -1
         self._toggle_row = -1
+        self._copy_col = None        # set with the delegates
+        self._copy_hover_row = -1    # row whose copy icon is under the mouse
+        self._copy_pressed = False   # a press on a copy icon (its release is ours too)
         # Channels whose latest calibration is too old (get a red "!" on Status).
         self._stale_channels = set()
         # Channels with a calibration awaiting decision (whole row tinted yellow).
@@ -192,7 +234,7 @@ class DataTableWidget(QTableWidget):
     # Zoom (row height + font)
     # ------------------------------------------------------------------
     def _font_px(self) -> int:
-        return max(8, round(self.BASE_FONT_PX * self._zoom))
+        return max(6, round(self.BASE_FONT_PX * self._zoom))
 
     def _apply_table_style(self) -> None:
         """(Re)apply the main table stylesheet with the current zoom font size.
@@ -243,13 +285,35 @@ class DataTableWidget(QTableWidget):
         self._zoom = zoom
         self._apply_table_style()
         self._apply_frozen_style()
-        row_min = round(self.BASE_ROW_HEIGHT * zoom)
+        views = [self] + ([self.frozen_view] if hasattr(self, "frozen_view") else [])
+        for view in views:
+            for col in range(self.columnCount()):
+                delegate = view.itemDelegateForColumn(col)
+                if isinstance(delegate, PillDelegate):
+                    delegate.set_scale(zoom)
+        row_min = self._row_floor()
         self.verticalHeader().setDefaultSectionSize(row_min)
         if hasattr(self, "frozen_view"):
             self.frozen_view.verticalHeader().setDefaultSectionSize(row_min)
         # Re-fit existing rows to the new font (frozen rows follow via sectionResized).
         self.resizeRowsToContents()
+        self._pad_multiline_rows()
         return zoom
+
+    def _row_floor(self) -> int:
+        return round(self.BASE_ROW_HEIGHT * self._zoom)
+
+    def sizeHintForRow(self, row: int) -> int:  # noqa: N802
+        """Content height, but never below the zoomed row floor."""
+        return max(super().sizeHintForRow(row), self._row_floor())
+
+    # Qt's versions also floor rows at the hidden row header's size hint (~50 px).
+    def resizeRowToContents(self, row: int) -> None:  # noqa: N802
+        self.setRowHeight(row, self.sizeHintForRow(row))
+
+    def resizeRowsToContents(self) -> None:  # noqa: N802
+        for row in range(self.rowCount()):
+            self.resizeRowToContents(row)
 
     def zoom_step(self, direction: int) -> float:
         """Zoom in (direction>0) or out (direction<0) by one step."""
@@ -372,7 +436,7 @@ class DataTableWidget(QTableWidget):
 
     def _pad_multiline_row(self, row):
         """Give a wrapped (multi-line) row a few extra px so it isn't cramped."""
-        single = self.fontMetrics().height() + 8  # ~ a single-line row height
+        single = max(self.fontMetrics().height() + 8, self._row_floor())  # ~ a single-line row
         h = self.rowHeight(row)
         if h > single:
             self.setRowHeight(row, h + self.MULTILINE_ROW_EXTRA)
@@ -528,9 +592,58 @@ class DataTableWidget(QTableWidget):
         rows = self.selectionModel().selectedRows()
         return rows[0].row() if rows else -1
 
+    # ------------------------------------------------------------------
+    # Copy icon (Data filename)
+    # ------------------------------------------------------------------
+    def _copy_hit(self, pos) -> str:
+        """The cell's text if ``pos`` is on a copy icon, else ""."""
+        index = self.indexAt(pos)
+        if self._copy_col is None or not index.isValid() or index.column() != self._copy_col:
+            return ""
+        item = self.item(index.row(), index.column())
+        raw = item.data(self.RAW_ROLE) if item else None
+        text = ((raw if raw is not None else item.text()) if item else "").strip()
+        icon = copy_icon_rect(self.visualRect(index), self.fontMetrics()).adjusted(-4, -4, 4, 4)
+        return text if text and icon.contains(pos) else ""
+
+    COPIED_MS = 1500  # how long "Copied to clipboard" stays
+
+    def _show_copied(self, pos) -> None:
+        """A small "Copied to clipboard" label beside the icon, gone after COPIED_MS."""
+        label = getattr(self, "_copied_label", None)
+        if label is None:
+            label = self._copied_label = QLabel("Copied to clipboard", self.viewport())
+            label.setStyleSheet("background:#1F2A33; color:#FFFFFF; border-radius:4px;"
+                                " padding:4px 10px; font-size:12px;")
+            label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            self._copied_timer = QTimer(self)
+            self._copied_timer.setSingleShot(True)
+            self._copied_timer.timeout.connect(label.hide)
+        label.adjustSize()
+        # Left of the click, above it when there's room; kept inside the table.
+        vp = self.viewport().rect()
+        x = min(max(pos.x() - label.width() - 12, vp.left() + 4), vp.right() - label.width() - 4)
+        y = pos.y() - label.height() - 8
+        if y < vp.top() + 4:
+            y = pos.y() + 14
+        label.move(x, y)
+        label.show()
+        label.raise_()
+        self._copied_timer.start(self.COPIED_MS)
+
+    def _set_copy_hover(self, row: int) -> None:
+        if row != self._copy_hover_row:
+            self._copy_hover_row = row
+            if row == -1:
+                self.viewport().unsetCursor()
+            else:
+                self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
+            self.viewport().update()
+
     def mouseMoveEvent(self, event):
         """Track the hovered row (whole-row border) + Project ID tooltip."""
         self._set_hover_row(self.indexAt(event.pos()).row())
+        self._set_copy_hover(self.indexAt(event.pos()).row() if self._copy_hit(event.pos()) else -1)
         item = self.itemAt(event.pos())
         if item and self.projects_manager:
             column_names = self.manager.get_column_names()
@@ -548,9 +661,18 @@ class DataTableWidget(QTableWidget):
 
     def leaveEvent(self, event):
         self._set_hover_row(-1)
+        self._set_copy_hover(-1)
         super().leaveEvent(event)
 
     def mousePressEvent(self, event):
+        # A click on the copy icon only copies: no row (de)selection.
+        text = self._copy_hit(event.pos()) if event.button() == Qt.MouseButton.LeftButton else ""
+        if text:
+            QApplication.clipboard().setText(text)
+            self._show_copied(event.pos())
+            self._copy_pressed = True
+            event.accept()
+            return
         # Remember a press on the already-selected row so release can toggle it
         # off (clearing on press wouldn't stick, the base re-selects on release).
         self._toggle_row = -1
@@ -560,7 +682,17 @@ class DataTableWidget(QTableWidget):
                 self._toggle_row = r
         super().mousePressEvent(event)
 
+    def mouseDoubleClickEvent(self, event):
+        if self._copy_hit(event.pos()):
+            event.accept()  # a quick second click on the icon, not "open the editor"
+            return
+        super().mouseDoubleClickEvent(event)
+
     def mouseReleaseEvent(self, event):
+        if self._copy_pressed:
+            self._copy_pressed = False
+            event.accept()
+            return
         super().mouseReleaseEvent(event)
         if (self._toggle_row != -1 and event.button() == Qt.MouseButton.LeftButton
                 and self.indexAt(event.pos()).row() == self._toggle_row):
@@ -786,6 +918,11 @@ class DataTableWidget(QTableWidget):
         self.setItemDelegate(_RowTintDelegate(self))
         if hasattr(self, "frozen_view"):
             self.frozen_view.setItemDelegate(_RowTintDelegate(self.frozen_view))
+
+        names = self.manager.get_column_names()
+        self._copy_col = names.index(self.COPY_COLUMN) if self.COPY_COLUMN in names else None
+        if self._copy_col is not None:
+            self.setItemDelegateForColumn(self._copy_col, _CopyCellDelegate(self))
 
         get_spec = getattr(self.manager, "get_field_spec", None)
         if not callable(get_spec):

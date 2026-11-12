@@ -1,5 +1,5 @@
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QTabWidget, QMessageBox,
     QTabBar,
@@ -224,14 +224,15 @@ class MainWindow(QMainWindow):
             "Cathode": plan.get("cathode", ""),
             "Current owner": plan.get("name", ""),  # the plan's Name is its requester
             "Start date": now.strftime("%Y-%m-%d %H:00"),
+            "Test length [h]": plan.get("test_length_h", ""),  # the editor computes the end
         }
-        try:
-            hours = float((plan.get("test_length_h") or "").replace(",", "."))
-            prefill["Expected end date"] = (now + timedelta(hours=hours)).strftime("%Y-%m-%d")
-        except ValueError:
-            pass
-        notes = [f"{label}: {plan[key]}" for key, label in (("protocol", "Protocol"),
-                                                             ("aim", "Aim")) if plan.get(key)]
+        # Before migration 026 the protocol has no field, so it goes into Comments.
+        noted = (("aim", "Aim"),)
+        if self.cells_manager.has_protocol():
+            prefill["Protocol"] = plan.get("protocol", "")
+        else:
+            noted = (("protocol", "Protocol"),) + noted
+        notes = [f"{label}: {plan[key]}" for key, label in noted if plan.get(key)]
         if notes:
             prefill["Comments"] = "\n".join(notes)
         self.tabs.setCurrentWidget(self.cells_mapping_tab)

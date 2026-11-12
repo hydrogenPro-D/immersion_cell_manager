@@ -24,11 +24,13 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
     QStyle,
     QStyleOptionComboBox,
+    QCompleter,
 )
-from PyQt6.QtCore import Qt, QDate, QTime, QEvent, QPointF, pyqtSignal
-from PyQt6.QtGui import QColor, QPixmap, QIcon, QMouseEvent
+from PyQt6.QtCore import Qt, QDate, QTime, QEvent, QPointF, QRegularExpression, pyqtSignal
+from PyQt6.QtGui import QColor, QPixmap, QIcon, QMouseEvent, QRegularExpressionValidator
 
 from src.gui.widgets.data_table_widget import DataTableWidget
+from src.data.immersion_cells_manager import expected_end
 
 
 # Custom QComboBox that passes wheel events to parent for scrolling
@@ -345,6 +347,10 @@ class EditRowDialog(DragMoveMixin, QDialog):
     # Column name (case-insensitive) that uses the project dropdown + manager.
     PROJECT_COLUMN = "project id"
 
+    # Expected end = start + test length (display names, as in the manager).
+    TEST_LENGTH_COLUMN = "Test length [h]"
+    EXPECTED_END_COLUMN = "Expected end date"
+
     # Default values (by lower-cased column name) applied when a field is empty.
     DEFAULT_VALUES = {}
 
@@ -397,8 +403,16 @@ class EditRowDialog(DragMoveMixin, QDialog):
         self._channel_col = self._find_channel_column()
         self._channel_value = self._get_cell_text(self._channel_col) if self._channel_col is not None and not is_add_mode else ""
 
+        # No derived-field updates while the stored values are being loaded.
+        self._loading = True
         self.init_ui()
         self.load_row_data()
+        self._loaded_length = self._field_value(self.TEST_LENGTH_COLUMN)
+        end_field = self.input_fields.get(self.EXPECTED_END_COLUMN)
+        self._loaded_end = (self._read_editor_value(end_field, self._spec_for(self.EXPECTED_END_COLUMN))
+                            if end_field is not None else "")
+        self._loading = False
+        self._show_expected_end()
 
     # ...existing code...
 
@@ -532,6 +546,16 @@ class EditRowDialog(DragMoveMixin, QDialog):
             # Skip "Start hour" - it's managed by the date picker, not shown as a separate field
             if column_name.strip().lower() == "start hour":
                 continue
+            # Elapsed time: shown in the table only, so it isn't mistaken for the test length.
+            if column_name.strip().lower() == "duration":
+                continue
+            # Calculated from the test length: shown as text in that row, editor kept for saving.
+            if column_name == self.EXPECTED_END_COLUMN and self.TEST_LENGTH_COLUMN in self.columns:
+                editor = self._build_editor(self._spec_for(column_name), read_only=True)
+                editor.setParent(form_container)
+                editor.hide()
+                self.input_fields[column_name] = editor
+                continue
 
             # Track Status field position
             if column_name.strip().lower() == "status":
@@ -598,6 +622,13 @@ class EditRowDialog(DragMoveMixin, QDialog):
 
         if column_name.strip().lower() == "status" and isinstance(editor, QComboBox):
             editor.currentTextChanged.connect(self._on_status_changed)
+        if column_name == self.TEST_LENGTH_COLUMN and isinstance(editor, QLineEdit):
+            editor.setValidator(QRegularExpressionValidator(
+                QRegularExpression(r"^\d*[.,]?\d*$"), editor))
+            editor.textChanged.connect(self._update_expected_end)
+        if isinstance(editor, CalendarDateTimeEdit):  # Start date + hour
+            editor.date_edit.dateChanged.connect(self._update_expected_end)
+            editor.time_edit.timeChanged.connect(self._update_expected_end)
 
         # The right-hand side is the editor, optionally with a trailing button.
         is_project = column_name.strip().lower() == self.PROJECT_COLUMN
@@ -627,6 +658,7 @@ class EditRowDialog(DragMoveMixin, QDialog):
             editor.currentIndexChanged.connect(
                 lambda _idx=0, combo=editor: self._hide_archived_project_items(combo)
             )
+            editor.currentTextChanged.connect(self._refresh_project_specs)
             self._hide_archived_project_items(editor)
             editor_row.addWidget(manage_btn)
             right = editor_row
@@ -645,6 +677,17 @@ class EditRowDialog(DragMoveMixin, QDialog):
                 lambda _checked=False, e=editor: e.clear_date()
             )
             editor_row.addWidget(clear_btn)
+            right = editor_row
+        elif column_name == self.TEST_LENGTH_COLUMN:
+            # The calculated expected end, as plain text beside the length.
+            editor_row = QHBoxLayout()
+            editor_row.setContentsMargins(0, 0, 0, 0)
+            editor_row.setSpacing(12)
+            editor_row.addWidget(editor, 1)
+            self._end_label = QLabel()
+            self._end_label.setObjectName("FieldLabel")
+            self._end_label.setMinimumWidth(150)
+            editor_row.addWidget(self._end_label)
             right = editor_row
         elif column_name.strip().lower() == "data filename" and not is_read_only:
             # A Generate button beside it builds the standard data filename.
@@ -690,7 +733,8 @@ class EditRowDialog(DragMoveMixin, QDialog):
         anode = self._field_value("Anode")
         channel = self._field_value("Channel") or self._channel_value
         project = self._field_value("Project ID")
-        proposed = builder(cathode, anode, channel, project)
+        proposed = builder(cathode, anode, channel, project,
+                           self._field_value("Density [g/L]"), self._field_value("Fe [ppm]"))
         text, ok = QInputDialog.getText(
             self, "Generate data filename",
             "Review / edit the proposed filename before applying:",
@@ -704,6 +748,8 @@ class EditRowDialog(DragMoveMixin, QDialog):
     # -------------------------------------------------- Editor factory
     def _build_editor(self, spec: FieldSpec, read_only: bool) -> QWidget:
         """Create the right widget for a field based on its type."""
+        if spec.field_type is FieldType.SUGGEST:
+            return self._suggest_combo(spec, read_only)
         if spec.field_type is FieldType.CHOICE:
             if spec.color_resolver is not None:
                 combo = ScrollablePillComboBox(spec.color_resolver)
@@ -772,6 +818,36 @@ class EditRowDialog(DragMoveMixin, QDialog):
             placeholder = spec.placeholder or f"Enter {spec.name.lower()}…"
             line.setPlaceholderText(placeholder)
         return line
+
+    @staticmethod
+    def _suggest_combo(spec: FieldSpec, read_only: bool) -> QComboBox:
+        """Type freely or pick a suggestion; typing completes inline from the list."""
+        combo = ProjectComboBox()  # combo with a visible arrow
+        combo.setObjectName("ProjectField")
+        combo.setCursor(Qt.CursorShape.PointingHandCursor)
+        combo.setEditable(True)
+        combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        combo.addItems(spec.choices)
+        combo.setMaxVisibleItems(12)
+        completer = QCompleter(combo.model(), combo)
+        completer.setCompletionMode(QCompleter.CompletionMode.InlineCompletion)
+        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        combo.setCompleter(completer)
+
+        def match_case():  # "marcus" -> "Marcus", the list's spelling
+            idx = combo.findText(combo.currentText().strip(), Qt.MatchFlag.MatchFixedString)
+            if idx >= 0 and combo.itemText(idx) != combo.currentText():
+                combo.setEditText(combo.itemText(idx))
+        combo.lineEdit().editingFinished.connect(match_case)
+        # The arrow is an overlay; an editable combo opens only from this button.
+        combo.setStyleSheet("QComboBox#ProjectField::drop-down { width: 34px; border: none; }")
+        combo.lineEdit().setStyleSheet(
+            "background:transparent; border:none; padding:0px;"
+            " selection-background-color:#BFE6E6; selection-color:#000000;")
+        combo.lineEdit().setPlaceholderText(spec.placeholder or f"Enter {spec.name.lower()}…")
+        combo.setCurrentIndex(-1)
+        combo.setEnabled(not read_only)
+        return combo
 
     def _spec_for(self, column_name: str) -> FieldSpec:
         """Get the FieldSpec for a column, falling back to plain text."""
@@ -927,6 +1003,8 @@ class EditRowDialog(DragMoveMixin, QDialog):
         projects_manager = getter()
 
         current = combo.currentText()
+        # Refill density/Fe afterwards only if they still are the project's (not typed in).
+        untouched = self._spec_values() == self._project_spec_values(current)
 
         dialog = ProjectsAdminDialog(
             projects_manager, self, on_remove=self.on_project_removed,
@@ -955,6 +1033,53 @@ class EditRowDialog(DragMoveMixin, QDialog):
         combo.setCurrentIndex(max(idx, 0))
         combo.blockSignals(False)
         self._hide_archived_project_items(combo)
+        if untouched:
+            self._refresh_project_specs(combo.currentText())
+
+    # Density / Fe: the cell's own, prefilled from the project when it is picked.
+    _SPEC_COLUMNS = ("Density [g/L]", "Fe [ppm]")
+
+    def _spec_values(self) -> tuple:
+        return tuple(self._field_value(c) for c in self._SPEC_COLUMNS)
+
+    def _project_spec_values(self, project: str) -> tuple:
+        getter = getattr(self.manager, "get_projects_manager", None)
+        if not callable(getter):
+            return ("", "")
+        pm = getter()
+        return (pm.get_density(project), pm.get_fe_ppm(project))
+
+    def _refresh_project_specs(self, project: str) -> None:
+        """Fill density and Fe with the chosen project's values."""
+        if self._loading:
+            return
+        for column_name, value in zip(self._SPEC_COLUMNS, self._project_spec_values(project)):
+            editor = self.input_fields.get(column_name)
+            if isinstance(editor, QLineEdit):
+                editor.setText(value)
+
+    def _update_expected_end(self, *_):
+        """Expected end = start date + hour + test length. Without a length, a cell
+        that never had one keeps its stored end date."""
+        end_field = self.input_fields.get(self.EXPECTED_END_COLUMN)
+        start = self.input_fields.get("Start date")
+        if self._loading or end_field is None or not isinstance(start, CalendarDateTimeEdit):
+            return
+        length = self._field_value(self.TEST_LENGTH_COLUMN)
+        if length:
+            end = expected_end(start.date().toString("yyyy-MM-dd"), start.hours(), length)
+        else:
+            end = "" if self._loaded_length else self._loaded_end
+        self._set_editor_value(end_field, self._spec_for(self.EXPECTED_END_COLUMN), end)
+        self._show_expected_end()
+
+    def _show_expected_end(self) -> None:
+        label = getattr(self, "_end_label", None)
+        end_field = self.input_fields.get(self.EXPECTED_END_COLUMN)
+        if label is None or end_field is None:
+            return
+        end = self._read_editor_value(end_field, self._spec_for(self.EXPECTED_END_COLUMN))
+        label.setText(f"Ends {end or '-'}")
 
     def save_changes(self):
         """Save changes back to the table and emit signal with row data"""
@@ -1187,6 +1312,9 @@ class EditRowDialog(DragMoveMixin, QDialog):
     # ---------------------------------------------- Editor read / write
     @staticmethod
     def _set_editor_value(editor: QWidget, spec: FieldSpec, text: str) -> None:
+        if isinstance(editor, QComboBox) and editor.isEditable():
+            editor.setEditText(text)
+            return
         if isinstance(editor, QComboBox):
             idx = editor.findText(text, Qt.MatchFlag.MatchFixedString)
             if idx < 0 and text:
