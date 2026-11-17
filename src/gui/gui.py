@@ -145,8 +145,10 @@ class MainWindow(QMainWindow):
         # cell into "In repair" (comment-only); an Approve returns an In-repair
         # cell to "Available" (it won't disturb an In-use cell).
         def on_calibration_decision(channel: str, passed: bool):
+            cell = self.cells_manager.get_cell_by_channel(channel)
+            if not cell:
+                return  # a calibration-only channel (Lab station): no cell to update
             if passed:
-                cell = self.cells_manager.get_cell_by_channel(channel)
                 if (cell.get("status") or "").strip().lower() == "in repair":
                     self.cells_manager.set_channel_status_cleared(channel, "Available")
             else:

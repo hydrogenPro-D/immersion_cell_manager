@@ -531,7 +531,8 @@ class DataTableWidget(QTableWidget):
         return raw if raw is not None else item.text()
 
     def _mark_stale_calibration(self, row, data, column_names):
-        """Flag the Status cell with a red '!' if this row's channel is stale."""
+        """Flag the Status cell with a red '!' if this row's channel is stale and
+        Available (a running test isn't affected; only starting the next one is)."""
         if not self._stale_channels:
             return
         try:
@@ -541,7 +542,8 @@ class DataTableWidget(QTableWidget):
             return
         channel = str(data[channel_col]) if channel_col < len(data) else ""
         item = self.item(row, status_col)
-        if item is not None and channel in self._stale_channels:
+        available = item is not None and item.text().strip().lower() == "available"
+        if available and channel in self._stale_channels:
             item.setData(WARN_ROLE, True)
             item.setToolTip(STALE_CALIBRATION_TOOLTIP)
 

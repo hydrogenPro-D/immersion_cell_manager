@@ -226,6 +226,35 @@ class CalibrationTab(QWidget):
     # --------------------------------------------------------------- Data
     def reload_data(self):
         records = self.manager.get_latest_per_channel()
+        # Content-sized columns re-measure every row on each setItem (~3 ms each,
+        # 2-3 s per reload): size them once, after the fill.
+        header = self.table.horizontalHeader()
+        modes = [header.sectionResizeMode(c) for c in range(header.count())]
+        for c, mode in enumerate(modes):
+            if mode == QHeaderView.ResizeMode.ResizeToContents:
+                header.setSectionResizeMode(c, QHeaderView.ResizeMode.Fixed)
+        try:
+            self._fill(records)
+        finally:
+            for c, mode in enumerate(modes):
+                header.setSectionResizeMode(c, mode)
+        # Grow rows to fit multiline notes (word wrap is on).
+        self.table.resizeRowsToContents()
+
+        # Curves plot: one interpolated curve per channel with a complete
+        # (all six ΔV%) latest measurement.
+        series = [{"channel": rec["channel"], "status": rec["status"],
+                   "deltas": rec["deltas"]}
+                  for rec in records
+                  if all(d is not None for d in rec["deltas"])]
+        self.curves_plot.set_data(
+            self.manager.resistances(), series, self.manager.bounds()
+        )
+
+        n = len(records)
+        self.count_badge.setText(f"{n} channel{'s' if n != 1 else ''}")
+
+    def _fill(self, records) -> None:
         self.table.setRowCount(len(records))
         for r, rec in enumerate(records):
             col = 0
@@ -271,22 +300,6 @@ class CalibrationTab(QWidget):
             self.table.setItem(r, col, status_item)
             col += 1
             self.table.setItem(r, col, QTableWidgetItem(rec["note"]))
-
-        # Grow rows to fit multiline notes (word wrap is on).
-        self.table.resizeRowsToContents()
-
-        # Curves plot: one interpolated curve per channel with a complete
-        # (all six ΔV%) latest measurement.
-        series = [{"channel": rec["channel"], "status": rec["status"],
-                   "deltas": rec["deltas"]}
-                  for rec in records
-                  if all(d is not None for d in rec["deltas"])]
-        self.curves_plot.set_data(
-            self.manager.resistances(), series, self.manager.bounds()
-        )
-
-        n = len(records)
-        self.count_badge.setText(f"{n} channel{'s' if n != 1 else ''}")
 
     def _on_row_activated(self, index):
         row = index.row()
