@@ -367,6 +367,16 @@ DIALOG_STYLE = """
         background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
             stop:0 #3FA3A3, stop:1 #2F8B8B);
     }
+    QPushButton:disabled {
+        background-color: #F3F6F8;
+        border-color: #E1E8ED;
+        color: #A4B1BA;
+    }
+    QPushButton:default:disabled {
+        background: #BCD3D3;
+        border: 1px solid #BCD3D3;
+        color: #EAF4F4;
+    }
 """ + SCROLLBAR_STYLE
 
 

@@ -108,8 +108,25 @@ class ExperimentPlanManager:
         return self._write("usp_experiment_plan_update", params)
 
     def approve(self, plan_id, approved_by: str) -> str:
-        return self._write("usp_experiment_plan_approve",
-                           {"id": int(plan_id), "approved_by": to_param(approved_by)})
+        """Schedule a plan at the end of its urgency's block (after the last plan
+        at least as urgent); people can still drag it anywhere afterwards."""
+        error = self._write("usp_experiment_plan_approve",
+                            {"id": int(plan_id), "approved_by": to_param(approved_by)})
+        if error:
+            return error
+        order = [p for p in self.get_scheduled() if p["id"] != plan_id]
+        plan = self.get_plan(plan_id)
+        rank = URGENCIES.index(plan["urgency"]) if plan and plan["urgency"] in URGENCIES else 1
+        at = 0
+        for i, p in enumerate(order):
+            if (URGENCIES.index(p["urgency"]) if p["urgency"] in URGENCIES else 1) >= rank:
+                at = i + 1
+        ids = [p["id"] for p in order]
+        ids.insert(at, plan_id)
+        if ids == [p["id"] for p in self.get_scheduled()]:
+            return ""  # already in place (the approve put it last)
+        error = self.reorder(ids)
+        return f"The plan was approved but could not be placed by urgency.\n\n{error}" if error else ""
 
     def unapprove(self, plan_id) -> str:
         return self._write("usp_experiment_plan_unapprove", {"id": int(plan_id)})

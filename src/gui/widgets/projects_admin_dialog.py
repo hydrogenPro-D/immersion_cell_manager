@@ -32,9 +32,23 @@ from PyQt6.QtGui import QColor, QPixmap, QIcon
 
 from src.gui.styles.dialog_styles import DIALOG_STYLE
 from src.gui.widgets.drag_move import DragMoveMixin
+from src.gui.widgets.confirm_dialog import ConfirmDialog
 from src.data.projects_manager import DEFAULT_PROJECT_COLOR, COLOR_PALETTE
 from src.gui.widgets.project_history_dialog import ProjectHistoryDialog
 
+
+# The description box: a full, visible outline (the shared style only hints at one).
+_TEXT_BOX_STYLE = """
+    QTextEdit {
+        background: #FFFFFF;
+        border: 1px solid #C7D3DB;
+        border-radius: 6px;
+        padding: 4px;
+    }
+    QTextEdit:focus {
+        border: 1px solid #3FA3A3;
+    }
+"""
 
 # Extra styling layered on top of DIALOG_STYLE to give the projects list a
 # darker, more obvious highlight when a project is selected.
@@ -57,6 +71,15 @@ _PROJECTS_LIST_STYLE = """
     QListWidget#ProjectsList::item:selected {
         background-color: #2F8B8B;
         color: #FFFFFF;
+    }
+""" + _TEXT_BOX_STYLE + """
+    QLineEdit[viewMode="true"], QTextEdit[viewMode="true"],
+    QLineEdit[viewMode="true"]:hover, QLineEdit[viewMode="true"]:focus,
+    QTextEdit[viewMode="true"]:hover, QTextEdit[viewMode="true"]:focus {
+        background: transparent;
+        border: none;
+        padding-left: 0px;
+        color: #1F2A33;
     }
 """
 
@@ -84,6 +107,8 @@ class ProjectsAdminDialog(DragMoveMixin, QDialog):
         self.color = DEFAULT_PROJECT_COLOR
         self._original = ()      # snapshot of the loaded values (for change check)
         self._loading = False    # suppress the change check while populating
+        self._reloading = False  # list rebuilt by code: no unsaved-changes question
+        self._editing = False    # Edit project pressed (fields are inputs)
         self.init_ui()
         self._reload()
 
@@ -174,11 +199,11 @@ class ProjectsAdminDialog(DragMoveMixin, QDialog):
         # in the active view; Restore replaces them in the archived view.
         btn_col = QVBoxLayout()
         btn_col.setSpacing(8)
-        self.add_btn = QPushButton("Add project")
+        self.add_btn = QPushButton("Add new project")
         self.add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.add_btn.setAutoDefault(False)
         self.add_btn.clicked.connect(self._on_add)
-        self.archive_btn = QPushButton("Archive Project")
+        self.archive_btn = QPushButton("Archive selected project")
         self.archive_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.archive_btn.setAutoDefault(False)
         self.archive_btn.setEnabled(False)  # needs a selected project
@@ -210,9 +235,15 @@ class ProjectsAdminDialog(DragMoveMixin, QDialog):
         self.history_btn.setAutoDefault(False)
         self.history_btn.setEnabled(False)  # needs a selected project
         self.history_btn.clicked.connect(self._on_history)
+        self.edit_btn = QPushButton("Edit project")
+        self.edit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.edit_btn.setAutoDefault(False)
+        self.edit_btn.setVisible(False)  # needs a selected, active project
+        self.edit_btn.clicked.connect(self._on_edit)
         name_row = QHBoxLayout()
         name_row.addWidget(name_label, 0, Qt.AlignmentFlag.AlignBottom)
         name_row.addStretch(1)
+        name_row.addWidget(self.edit_btn)
         name_row.addWidget(self.history_btn)
         layout.addLayout(name_row)
         layout.addWidget(self.name_input)
@@ -254,9 +285,6 @@ class ProjectsAdminDialog(DragMoveMixin, QDialog):
         layout.addWidget(description_label)
         layout.addWidget(self.description_input, 1)
 
-        specs_label = QLabel("Density and iron used in the project")
-        specs_label.setObjectName("FieldLabel")
-        layout.addWidget(specs_label)
         specs_row = QHBoxLayout()
         specs_row.setSpacing(10)
         density_col = QVBoxLayout()
@@ -320,6 +348,8 @@ class ProjectsAdminDialog(DragMoveMixin, QDialog):
     # ----------------------------------------------------------------- Data
     def _toggle_view(self) -> None:
         """Flip the list between active and archived projects."""
+        if not self._confirm_discard():
+            return
         self._showing_archived = not self._showing_archived
         archived = self._showing_archived
         self.toggle_btn.setText(
@@ -357,14 +387,24 @@ class ProjectsAdminDialog(DragMoveMixin, QDialog):
         if target < 0 and select_name is None and projects:
             target = 0
         if target >= 0:
-            self.list_widget.setCurrentRow(target)  # fires _on_selection -> load
+            # Fires _on_selection -> load; callers already settled any unsaved edits.
+            self._reloading = True
+            try:
+                self.list_widget.setCurrentRow(target)
+            finally:
+                self._reloading = False
         else:
             self.restore_btn.setEnabled(False)
             self.archive_btn.setEnabled(False)
             self.history_btn.setEnabled(False)
             self._clear_form()
 
-    def _on_selection(self, current, _previous) -> None:
+    def _on_selection(self, current, previous) -> None:
+        if not self._reloading and not self._confirm_discard():
+            self.list_widget.blockSignals(True)  # Stay: back to the edited project
+            self.list_widget.setCurrentItem(previous)
+            self.list_widget.blockSignals(False)
+            return
         self.history_btn.setEnabled(current is not None)
         if self._showing_archived:
             self.restore_btn.setEnabled(current is not None)
@@ -388,12 +428,11 @@ class ProjectsAdminDialog(DragMoveMixin, QDialog):
         self.fe_ppm_input.setText(self.projects_manager.get_fe_ppm(name))
         self._loading = False
         self._original = self._snapshot()
-        # Archived projects are shown read-only (restore to edit them).
-        self._set_editable(not self._showing_archived)
+        self._set_editable(False)  # shown, not editable, until "Edit project"
         self._update_save_state()
 
     def _clear_form(self) -> None:
-        """Blank detail panel for a new (unsaved) project."""
+        """Blank, read-only detail panel: no project selected (empty list)."""
         self._loading = True
         self._current_name = None
         self.name_input.clear()
@@ -406,18 +445,39 @@ class ProjectsAdminDialog(DragMoveMixin, QDialog):
         self.fe_ppm_input.clear()
         self._loading = False
         self._original = self._snapshot()
-        self._set_editable(not self._showing_archived)
+        self._set_editable(False)
         self._update_save_state()
 
     def _set_editable(self, editable: bool) -> None:
-        """Toggle the detail form between editable and read-only (archived view)."""
-        self.name_input.setReadOnly(not editable)
-        self.owner_input.setReadOnly(not editable)
-        self.description_input.setReadOnly(not editable)
-        self.density_input.setReadOnly(not editable)
-        self.fe_ppm_input.setReadOnly(not editable)
+        """Edit mode (input fields, Save) or view mode (values shown as plain text).
+        Archived projects only have view mode (restore to edit them)."""
+        editable = editable and self._current_name is not None and not self._showing_archived
+        self._editing = editable
+        if not hasattr(self, "_edit_placeholders"):
+            self._edit_placeholders = {w: w.placeholderText() for w in self._text_fields()}
+        for w in self._text_fields():
+            w.setReadOnly(not editable)
+            w.setFocusPolicy(Qt.FocusPolicy.StrongFocus if editable else Qt.FocusPolicy.NoFocus)
+            w.setPlaceholderText(self._edit_placeholders[w] if editable else "-")
+            w.setProperty("viewMode", not editable)
+            w.style().unpolish(w)  # re-apply the view / edit look
+            w.style().polish(w)
         self.color_btn.setEnabled(editable)
         self.save_btn.setVisible(editable)
+        self.edit_btn.setVisible(self._current_name is not None and not self._showing_archived)
+        self.edit_btn.setText("Cancel editing" if editable else "Edit project")
+
+    def _text_fields(self) -> tuple:
+        return (self.name_input, self.owner_input, self.description_input,
+                self.density_input, self.fe_ppm_input)
+
+    def _on_edit(self) -> None:
+        if not self._editing:
+            self._set_editable(True)
+            self.name_input.setFocus()
+            self.name_input.end(False)
+        elif self._confirm_discard():
+            self._load_form(self._current_name)  # back to the stored values, view mode
 
     def _snapshot(self) -> tuple:
         """Current form values (compared against ``_original`` to detect edits)."""
@@ -430,6 +490,22 @@ class ProjectsAdminDialog(DragMoveMixin, QDialog):
             self.fe_ppm_input.text().strip(),
         )
 
+    def _has_unsaved_changes(self) -> bool:
+        return (self._current_name is not None and not self._showing_archived
+                and self._snapshot() != self._original)
+
+    def _confirm_discard(self) -> bool:
+        """True if there are no unsaved edits, or the user agrees to drop them."""
+        return not self._has_unsaved_changes() or ConfirmDialog.ask(
+            self, title="Unsaved changes",
+            message=f"Leave without saving the changes to <b>{self._current_name}</b>?",
+            confirm_text="Leave", cancel_text="Stay", destructive=True)
+
+    def done(self, result: int) -> None:
+        """Close (button or Esc): ask first while there are unsaved changes."""
+        if self._confirm_discard():
+            super().done(result)
+
     def _update_save_state(self) -> None:
         if self._loading:
             return
@@ -439,13 +515,11 @@ class ProjectsAdminDialog(DragMoveMixin, QDialog):
 
     # -------------------------------------------------------------- Actions
     def _on_add(self) -> None:
-        self.list_widget.blockSignals(True)
-        self.list_widget.setCurrentItem(None)
-        self.list_widget.blockSignals(False)
-        self.archive_btn.setEnabled(False)  # nothing selected to archive
-        self.history_btn.setEnabled(False)
-        self._clear_form()
-        self.name_input.setFocus()
+        if not self._confirm_discard():
+            return
+        dialog = NewProjectDialog(self.projects_manager, self)
+        if dialog.exec() and dialog.created_name:
+            self._reload(select_name=dialog.created_name)
 
     def _on_history(self) -> None:
         item = self.list_widget.currentItem()
@@ -453,7 +527,8 @@ class ProjectsAdminDialog(DragMoveMixin, QDialog):
             ProjectHistoryDialog(self, item.text()).exec()
 
     def _on_save(self) -> None:
-        if not self.save_btn.isEnabled():  # nothing changed (e.g. Enter key)
+        # New projects are made in NewProjectDialog; this saves the selected one.
+        if not self.save_btn.isEnabled() or self._current_name is None:
             return
         name = self.name_input.text().strip()
         if not name:
@@ -465,25 +540,6 @@ class ProjectsAdminDialog(DragMoveMixin, QDialog):
         density = self.density_input.text().strip()
         fe_ppm = self.fe_ppm_input.text().strip()
         owner = self.owner_input.text().strip()
-
-        if self._current_name is None:
-            # New project.
-            if not self.projects_manager.add_project(
-                name, self.color, description, density, fe_ppm, owner
-            ):
-                if name in set(self.projects_manager.get_archived_projects()):
-                    QMessageBox.information(
-                        self, "Project archived",
-                        f"'{name}' already exists but is archived. Select it in "
-                        "the Archived list and click Restore to bring it back.",
-                    )
-                else:
-                    QMessageBox.information(
-                        self, "Project exists", f"'{name}' already exists."
-                    )
-                return
-            self._reload(select_name=name)
-            return
 
         # Existing project (possibly renamed).
         old_name = self._current_name
@@ -547,3 +603,125 @@ class ProjectsAdminDialog(DragMoveMixin, QDialog):
             self._remove_callback(name)  # refresh the app's project combos
         # Still in the archived view: the restored project drops out of the list.
         self._reload()
+
+
+class NewProjectDialog(QDialog):
+    """A separate form for a new project; Create adds it. ``created_name`` is set
+    once it exists."""
+
+    def __init__(self, projects_manager, parent=None):
+        super().__init__(parent)
+        self.projects_manager = projects_manager
+        self.created_name = None
+        count = len(projects_manager.get_projects()) + len(projects_manager.get_archived_projects())
+        self.color = COLOR_PALETTE[count % len(COLOR_PALETTE)]
+        self.setWindowTitle("New project")
+        self.setModal(True)
+        self.resize(540, 0)
+        self.setStyleSheet(DIALOG_STYLE + _TEXT_BOX_STYLE)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 20, 24, 18)
+        root.setSpacing(10)
+        title = QLabel("New project")
+        title.setStyleSheet("font-size:16px; font-weight:700; color:#000000;")
+        root.addWidget(title)
+
+        def field(label: str, widget) -> None:
+            lbl = QLabel(label)
+            lbl.setObjectName("FieldLabel")
+            root.addWidget(lbl)
+            if isinstance(widget, QWidget):
+                root.addWidget(widget)
+            else:
+                root.addLayout(widget)
+
+        self.name_input = QLineEdit()
+        field("PROJECT NAME", self.name_input)
+        self.owner_input = QLineEdit()
+        if projects_manager.has_owner_column():
+            field("PROJECT OWNER (OPTIONAL)", self.owner_input)
+
+        color_row = QHBoxLayout()
+        color_row.setSpacing(8)
+        self.color_btn = QPushButton()
+        self.color_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.color_btn.setFixedWidth(46)
+        self.color_btn.setAutoDefault(False)
+        self.color_btn.clicked.connect(self._pick_color)
+        self.color_hint = QLabel()
+        self.color_hint.setStyleSheet("color: #4A5A66; font-size: 12px;")
+        color_row.addWidget(self.color_btn)
+        color_row.addWidget(self.color_hint, 1)
+        field("COLOR", color_row)
+        self._show_color()
+
+        self.description_input = QTextEdit()
+        self.description_input.setFixedHeight(80)
+        self.description_input.setTabChangesFocus(True)
+        field("DESCRIPTION (OPTIONAL)", self.description_input)
+
+        specs = QHBoxLayout()
+        specs.setSpacing(10)
+        self.density_input = QLineEdit()
+        self.fe_ppm_input = QLineEdit()
+        for label, widget in (("DENSITY (RHO)", self.density_input), ("FE [PPM]", self.fe_ppm_input)):
+            col = QVBoxLayout()
+            col.setSpacing(4)
+            lbl = QLabel(label)
+            lbl.setObjectName("FieldLabel")
+            col.addWidget(lbl)
+            col.addWidget(widget)
+            specs.addLayout(col)
+        root.addLayout(specs)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        cancel = QPushButton("Cancel")
+        cancel.setAutoDefault(False)
+        cancel.setCursor(Qt.CursorShape.PointingHandCursor)
+        cancel.clicked.connect(self.reject)
+        self.create_btn = QPushButton("Create project")
+        self.create_btn.setDefault(True)
+        self.create_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.create_btn.setEnabled(False)
+        self.create_btn.clicked.connect(self._create)
+        self.name_input.textChanged.connect(
+            lambda text: self.create_btn.setEnabled(bool(text.strip())))
+        buttons.addWidget(cancel)
+        buttons.addWidget(self.create_btn)
+        root.addSpacing(6)
+        root.addLayout(buttons)
+        self.name_input.setFocus()
+
+    def _show_color(self) -> None:
+        self.color_btn.setStyleSheet(
+            f"background: {self.color}; border: 1px solid #D8E2E8;"
+            " border-radius: 8px; min-width: 0px; padding: 9px 0px;")
+        self.color_hint.setText(self.color)
+
+    def _pick_color(self) -> None:
+        color = QColorDialog.getColor(QColor(self.color), self, "Choose project color")
+        if color.isValid():
+            self.color = color.name()
+            self._show_color()
+
+    def _create(self) -> None:
+        name = self.name_input.text().strip()
+        if not name:
+            return
+        if not self.projects_manager.add_project(
+            name, self.color, self.description_input.toPlainText().strip(),
+            self.density_input.text().strip(), self.fe_ppm_input.text().strip(),
+            self.owner_input.text().strip(),
+        ):
+            if name in set(self.projects_manager.get_archived_projects()):
+                QMessageBox.information(
+                    self, "Project archived",
+                    f"'{name}' already exists but is archived. Select it in the "
+                    "archived projects and click Restore to bring it back.")
+            else:
+                QMessageBox.information(self, "Project exists", f"'{name}' already exists.")
+            return  # stay open so the name can be changed
+        self.created_name = name
+        self.accept()

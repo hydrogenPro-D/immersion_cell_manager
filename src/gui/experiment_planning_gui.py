@@ -210,7 +210,7 @@ class PlanFields(QWidget):
         for i, u in enumerate(URGENCIES):
             self.urgency.setItemIcon(i, urgency_icon(u))
         rows = [("Name", self.name), ("Test length [h]", self.test_length),
-                ("Anode", self.anode), ("Cathode", self.cathode),
+                ("Cathode", self.cathode), ("Anode", self.anode),
                 ("Protocol", self.protocol), ("Project", self.project),
                 ("Aim", self.aim), ("Urgency", self.urgency)]
         self.channel = None
@@ -485,6 +485,17 @@ class PlanDialog(QDialog):
         b.clicked.connect(lambda: self._finish(action))
         return b
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        # The dialog style's min-width wins over a button's own (bold) size hint, so
+        # a long label ("Save and approve") got cut off: use the hint as the minimum.
+        for button in self.findChildren(QPushButton):
+            button.setMinimumWidth(max(button.minimumWidth(), button.sizeHint().width()))
+        self.layout().activate()
+        need = self.layout().minimumSize().width()
+        if self.width() < need:
+            self.resize(need, self.height())
+
     def changed(self) -> bool:
         return self.fields.values() != self._initial
 
@@ -621,7 +632,7 @@ class ExperimentPlanningTab(QWidget):
         lay.addWidget(table, 1)
         return page
 
-    _BASE_HEADERS = ["Name", "Test length [h]", "Anode", "Cathode", "Protocol",
+    _BASE_HEADERS = ["Name", "Test length [h]", "Cathode", "Anode", "Protocol",
                      "Project", "Aim", "Urgency", "Channel"]
 
     def _setup_table(self, table, scheduled: bool) -> None:
@@ -744,7 +755,7 @@ class ExperimentPlanningTab(QWidget):
         table.setRowCount(len(plans))
         for r, p in enumerate(plans):
             aim = p["aim"].splitlines()[0] if p["aim"] else ""
-            values = [p["name"], p["test_length_h"], p["anode"], p["cathode"],
+            values = [p["name"], p["test_length_h"], p["cathode"], p["anode"],
                       p["protocol"], p["project_id"], aim[:60] + ("…" if len(aim) > 60 else ""),
                       p["urgency"], p["channel"] or ANY_CELL]
             values = ([str(place.get(p["id"], r + 1))] + values + [p["approved_by"]] if scheduled

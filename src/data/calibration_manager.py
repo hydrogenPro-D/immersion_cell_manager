@@ -14,6 +14,7 @@ Backed by ``icm.channel_calibration``: reads via SELECT, writes via the
 """
 
 import json
+import re
 from datetime import date, datetime
 from pathlib import Path
 
@@ -222,6 +223,13 @@ class CalibrationManager:
                 continue
             rec = latest.get(channel) or self._empty_record(channel)
             self._apply_cell_status(rec, to_text(r.get("status")))
+            records.append(rec)
+        # Calibration-only channels (e.g. the "Lab 1-1" stations): no cell, listed last.
+        listed = {rec["channel"] for rec in records}
+        natural = lambda c: [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", c)]
+        for channel in sorted(set(latest) - listed, key=natural):
+            rec = latest[channel]
+            self._apply_cell_status(rec, "")
             records.append(rec)
         return records
 
